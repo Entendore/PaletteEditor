@@ -2,31 +2,13 @@
 """
 Palette Manager — Color Palette Management Application
 Single-file PySide6 + DuckDB + Numba application with CLI support.
-
-Usage:
-    python app.py              # Launch GUI (default)
-    python app.py gui          # Launch GUI
-    python app.py cli <cmd>    # CLI mode (list, generate, export, import, info)
 """
 
-import os
-import sys
-import time
-import random
-import math
-import json
-import argparse
-import csv
-import struct
-import logging
+import os, sys, time, random, math, json, argparse, csv, struct, logging
 from typing import List, Tuple, Optional, Dict, Any
 from collections import Counter
 
-# ── Logging ──────────────────────────────────────────────────
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("DuckPalette")
 
 try:
@@ -37,83 +19,91 @@ except ImportError:
 try:
     import numpy as np
     from numba import njit
-
     NUMBA_AVAILABLE = True
 except ImportError:
     NUMBA_AVAILABLE = False
-    logger.warning("numpy/numba not found. Falling back to pure Python (slower math).")
+    logger.warning("numpy/numba not found. Falling back to pure Python.")
 
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QPushButton,
-    QColorDialog, QListWidget, QFileDialog, QLabel, QListWidgetItem,
+    QColorDialog, QFileDialog, QLabel, QListWidget, QListWidgetItem,
     QHBoxLayout, QFrame, QScrollArea, QTabWidget, QFormLayout,
     QDoubleSpinBox, QComboBox, QMessageBox, QGroupBox, QInputDialog,
     QSplitter, QToolBar, QStatusBar, QMenu, QSpinBox, QLineEdit,
     QSizePolicy, QAbstractItemView, QToolTip, QToolButton, QSlider,
-    QCheckBox, QAbstractSpinBox,
+    QCheckBox, QAbstractSpinBox, QGridLayout, QLayout, QLayoutItem,
+    QSpacerItem, QSizePolicy as QSP,
 )
 from PySide6.QtGui import (
-    QColor, QBrush, QPainter, QPen, QFont, QAction,
-    QKeySequence, QPalette, QPixmap, QClipboard, QCursor, QImage,
+    QColor, QBrush, QPainter, QPen, QFont, QAction, QKeySequence,
+    QPalette, QPixmap, QClipboard, QCursor, QImage, QLinearGradient,
+    QDrag, QPainterPath, QConicalGradient, QRadialGradient,
 )
-from PySide6.QtCore import Qt, QSize, Signal, QTimer, QPoint
+from PySide6.QtCore import Qt, QSize, Signal, QTimer, QPoint, QMimeData, QByteArray
 
-
-# ══════════════════════════════════════════════════════════════
-#  STYLESHEET
-# ══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════
+#  STYLESHEET (improved)
+# ═══════════════════════════════════════════════════════════
 
 DARK_STYLE = """
-QMainWindow, QDialog { background-color: #1e1e2e; }
-QWidget { color: #cdd6f4; font-family: 'Segoe UI','Helvetica Neue',sans-serif; font-size: 13px; }
-QGroupBox { border:1px solid #45475a; border-radius:6px; margin-top:14px; padding-top:14px; font-weight:bold; }
-QGroupBox::title { subcontrol-origin:margin; left:10px; padding:0 5px; }
-QPushButton { background:#313244; border:1px solid #45475a; border-radius:5px; padding:6px 14px; color:#cdd6f4; }
-QPushButton:hover { background:#45475a; border-color:#585b70; }
-QPushButton:pressed { background:#585b70; }
-QPushButton:disabled { color:#585b70; }
-QLineEdit,QSpinBox,QDoubleSpinBox,QComboBox { background:#313244; border:1px solid #45475a; border-radius:4px; padding:4px 8px; color:#cdd6f4; }
-QLineEdit:focus,QSpinBox:focus,QDoubleSpinBox:focus { border-color:#89b4fa; }
+QMainWindow, QDialog { background-color: #1a1b26; }
+QWidget { color: #c0caf5; font-family: 'Segoe UI','Inter','Helvetica Neue',sans-serif; font-size: 13px; }
+QGroupBox { border:1px solid #3b4261; border-radius:8px; margin-top:16px; padding-top:16px; font-weight:600; color:#7aa2f7; }
+QGroupBox::title { subcontrol-origin:margin; left:12px; padding:0 6px; }
+QPushButton { background:#24283b; border:1px solid #3b4261; border-radius:6px; padding:7px 16px; color:#c0caf5; font-weight:500; }
+QPushButton:hover { background:#3b4261; border-color:#545c7e; }
+QPushButton:pressed { background:#545c7e; }
+QPushButton:disabled { color:#3b4261; }
+QPushButton[class="accent"] { background:#7aa2f7; color:#1a1b26; border:none; font-weight:600; }
+QPushButton[class="accent"]:hover { background:#89b4fa; }
+QPushButton[class="accent"]:pressed { background:#5b84d5; }
+QPushButton[class="danger"] { background:#f7768e; color:#1a1b26; border:none; font-weight:600; }
+QPushButton[class="danger"]:hover { background:#ff9e9e; }
+QLineEdit,QSpinBox,QDoubleSpinBox,QComboBox { background:#24283b; border:1px solid #3b4261; border-radius:6px; padding:5px 10px; color:#c0caf5; }
+QLineEdit:focus,QSpinBox:focus,QDoubleSpinBox:focus { border-color:#7aa2f7; }
 QComboBox::drop-down { border:none; }
-QComboBox QAbstractItemView { background:#313244; selection-background-color:#45475a; }
-QListWidget { background:#181825; border:1px solid #313244; border-radius:4px; padding:2px; }
-QListWidget::item { padding:5px; border-radius:3px; }
-QListWidget::item:selected { background:#45475a; }
-QListWidget::item:hover { background:#313244; }
-QTabWidget::pane { border:1px solid #313244; border-radius:4px; background:#1e1e2e; top:-1px; }
-QTabBar::tab { background:#313244; border:1px solid #45475a; border-bottom:none; border-top-left-radius:6px;
-               border-top-right-radius:6px; padding:7px 18px; margin-right:2px; color:#a6adc8; }
-QTabBar::tab:selected { background:#1e1e2e; color:#89b4fa; border-bottom:2px solid #89b4fa; }
-QTabBar::tab:hover:!selected { background:#45475a; }
-QScrollArea { border:none; }
-QSplitter::handle { background:#313244; width:3px; }
-QToolBar { background:#181825; border-bottom:1px solid #313244; spacing:6px; padding:4px; }
-QStatusBar { background:#181825; border-top:1px solid #313244; color:#a6adc8; font-size:12px; }
-QMenu { background:#313244; border:1px solid #45475a; border-radius:6px; padding:4px; }
-QMenu::item { padding:6px 24px; border-radius:3px; }
-QMenu::item:selected { background:#45475a; }
-QMenu::separator { height:1px; background:#45475a; margin:4px 8px; }
-QToolTip { background:#313244; color:#cdd6f4; border:1px solid #45475a; border-radius:4px; padding:4px 8px; }
-QFrame[frameShape="6"] { border:1px solid #313244; border-radius:4px; }
-QSlider::groove:horizontal { border: 1px solid #45475a; height: 6px; background: #313244; border-radius: 3px; }
-QSlider::handle:horizontal { background: #89b4fa; border: 1px solid #1e1e2e; width: 14px; margin: -5px 0; border-radius: 7px; }
-QSlider::sub-page:horizontal { background: #585b70; border-radius: 3px; }
-QScrollBar:vertical { background:#181825; width:10px; border-radius:5px; }
-QScrollBar::handle:vertical { background:#45475a; border-radius:5px; min-height:20px; }
+QComboBox QAbstractItemView { background:#24283b; selection-background-color:#3b4261; border-radius:4px; }
+QListWidget { background:#16161e; border:1px solid #24283b; border-radius:6px; padding:4px; outline:none; }
+QListWidget::item { padding:6px; border-radius:4px; margin:1px 0; }
+QListWidget::item:selected { background:#3b4261; color:#7aa2f7; }
+QListWidget::item:hover:!selected { background:#1f2335; }
+QTabWidget::pane { border:1px solid #24283b; border-radius:6px; background:#1a1b26; top:-1px; }
+QTabBar::tab { background:#24283b; border:1px solid #3b4261; border-bottom:none; border-top-left-radius:8px;
+               border-top-right-radius:8px; padding:8px 20px; margin-right:2px; color:#565f89; font-weight:500; }
+QTabBar::tab:selected { background:#1a1b26; color:#7aa2f7; border-bottom:2px solid #7aa2f7; }
+QTabBar::tab:hover:!selected { background:#3b4261; color:#c0caf5; }
+QScrollArea { border:none; background:transparent; }
+QSplitter::handle { background:#3b4261; width:3px; }
+QToolBar { background:#16161e; border-bottom:1px solid #24283b; spacing:8px; padding:4px 8px; }
+QStatusBar { background:#16161e; border-top:1px solid #24283b; color:#565f89; font-size:12px; }
+QMenu { background:#24283b; border:1px solid #3b4261; border-radius:8px; padding:6px; }
+QMenu::item { padding:7px 28px; border-radius:4px; }
+QMenu::item:selected { background:#3b4261; color:#7aa2f7; }
+QMenu::separator { height:1px; background:#3b4261; margin:4px 10px; }
+QToolTip { background:#24283b; color:#c0caf5; border:1px solid #3b4261; border-radius:6px; padding:6px 10px; }
+QFrame[frameShape="6"] { border:1px solid #24283b; border-radius:4px; }
+QSlider::groove:horizontal { border:1px solid #3b4261; height:8px; background:#24283b; border-radius:4px; }
+QSlider::handle:horizontal { background:#7aa2f7; border:2px solid #1a1b26; width:16px; margin:-6px 0; border-radius:8px; }
+QSlider::handle:horizontal:hover { background:#89b4fa; }
+QSlider::sub-page:horizontal { background:#3b4261; border-radius:4px; }
+QScrollBar:vertical { background:#16161e; width:10px; border-radius:5px; }
+QScrollBar::handle:vertical { background:#3b4261; border-radius:5px; min-height:20px; }
+QScrollBar::handle:vertical:hover { background:#545c7e; }
 QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical { height:0; }
-QScrollBar:horizontal { background:#181825; height:10px; border-radius:5px; }
-QScrollBar::handle:horizontal { background:#45475a; border-radius:5px; min-width:20px; }
+QScrollBar:horizontal { background:#16161e; height:10px; border-radius:5px; }
+QScrollBar::handle:horizontal { background:#3b4261; border-radius:5px; min-width:20px; }
 QScrollBar::add-line:horizontal,QScrollBar::sub-line:horizontal { width:0; }
+QCheckBox::indicator { width:16px; height:16px; border-radius:4px; border:1px solid #3b4261; background:#24283b; }
+QCheckBox::indicator:checked { background:#7aa2f7; border-color:#7aa2f7; }
 """
 
-
-# ══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════
 #  ACCELERATED MATH (NUMBA / FALLBACK)
-# ══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════
 
 if NUMBA_AVAILABLE:
     @njit(cache=True)
-    def _relative_luminance_numba(r: float, g: float, b: float) -> float:
+    def _relative_luminance_numba(r, g, b):
         c_r, c_g, c_b = r / 255.0, g / 255.0, b / 255.0
         l_r = c_r / 12.92 if c_r <= 0.03928 else ((c_r + 0.055) / 1.055) ** 2.4
         l_g = c_g / 12.92 if c_g <= 0.03928 else ((c_g + 0.055) / 1.055) ** 2.4
@@ -123,760 +113,497 @@ if NUMBA_AVAILABLE:
     @njit(cache=True)
     def calculate_metadata_numba(pal):
         n = pal.shape[0]
-        if n == 0:
-            return 0.0, 0.0, 0
+        if n == 0: return 0.0, 0.0, 0
         brightness = 0.0; max_lum = -1.0; min_lum = 256.0
         sum_r = 0.0; sum_g = 0.0; sum_b = 0.0
         for i in range(n):
-            r, g, b = pal[i, 0], pal[i, 1], pal[i, 2]
-            lum = 0.299 * r + 0.587 * g + 0.114 * b
+            r, g, b = pal[i,0], pal[i,1], pal[i,2]
+            lum = 0.299*r + 0.587*g + 0.114*b
             brightness += lum
-            if lum > max_lum:
-                max_lum = lum
-            if lum < min_lum:
-                min_lum = lum
+            if lum > max_lum: max_lum = lum
+            if lum < min_lum: min_lum = lum
             sum_r += r; sum_g += g; sum_b += b
         brightness /= n
         contrast = max_lum - min_lum
         dominant = 0
-        if sum_g >= sum_r and sum_g >= sum_b:
-            dominant = 1
-        elif sum_b >= sum_r and sum_b >= sum_g:
-            dominant = 2
+        if sum_g >= sum_r and sum_g >= sum_b: dominant = 1
+        elif sum_b >= sum_r and sum_b >= sum_g: dominant = 2
         return brightness, contrast, dominant
 
     @njit(cache=True)
     def palette_wcag_contrast_numba(pal):
         n = pal.shape[0]
-        if n < 2:
-            return 1.0
+        if n < 2: return 1.0
         max_lum = -1.0; min_lum = 10.0
         for i in range(n):
-            lum = _relative_luminance_numba(pal[i, 0], pal[i, 1], pal[i, 2])
-            if lum > max_lum:
-                max_lum = lum
-            if lum < min_lum:
-                min_lum = lum
+            lum = _relative_luminance_numba(pal[i,0], pal[i,1], pal[i,2])
+            if lum > max_lum: max_lum = lum
+            if lum < min_lum: min_lum = lum
         return (max_lum + 0.05) / (min_lum + 0.05)
 
-    M_PROTO = np.array([
-        [0.152286, 1.052583, -0.204868],
-        [0.114503, 0.786281, 0.099216],
-        [-0.003882, -0.048116, 1.051998],
-    ])
-    M_DEUTO = np.array([
-        [0.367322, 0.860646, -0.227968],
-        [0.280085, 0.672501, 0.047413],
-        [-0.011820, 0.042940, 0.968881],
-    ])
-    M_TRITA = np.array([
-        [1.255528, -0.076749, -0.178779],
-        [-0.078411, 0.930809, 0.147602],
-        [-0.004733, 0.691367, 0.313366],
-    ])
+    M_PROTO = np.array([[0.152286,1.052583,-0.204868],[0.114503,0.786281,0.099216],[-0.003882,-0.048116,1.051998]])
+    M_DEUTO = np.array([[0.367322,0.860646,-0.227968],[0.280085,0.672501,0.047413],[-0.011820,0.042940,0.968881]])
+    M_TRITA = np.array([[1.255528,-0.076749,-0.178779],[-0.078411,0.930809,0.147602],[-0.004733,0.691367,0.313366]])
 
     @njit(cache=True)
     def _apply_matrix_numba(pal, matrix):
         res = np.empty_like(pal)
         for i in range(pal.shape[0]):
-            r, g, b = pal[i, 0], pal[i, 1], pal[i, 2]
-            res[i, 0] = min(255.0, max(0.0, matrix[0, 0] * r + matrix[0, 1] * g + matrix[0, 2] * b))
-            res[i, 1] = min(255.0, max(0.0, matrix[1, 0] * r + matrix[1, 1] * g + matrix[1, 2] * b))
-            res[i, 2] = min(255.0, max(0.0, matrix[2, 0] * r + matrix[2, 1] * g + matrix[2, 2] * b))
+            r,g,b = pal[i,0],pal[i,1],pal[i,2]
+            res[i,0] = min(255.0,max(0.0,matrix[0,0]*r+matrix[0,1]*g+matrix[0,2]*b))
+            res[i,1] = min(255.0,max(0.0,matrix[1,0]*r+matrix[1,1]*g+matrix[1,2]*b))
+            res[i,2] = min(255.0,max(0.0,matrix[2,0]*r+matrix[2,1]*g+matrix[2,2]*b))
         return res
 
-    def simulate_colorblind(palette_list: List[Tuple[int, int, int]],
-                            cb_type: str = "proto") -> List[Tuple[int, int, int]]:
-        if not palette_list:
-            return []
+    def simulate_colorblind(palette_list, cb_type="proto"):
+        if not palette_list: return []
         pal = np.array(palette_list, dtype=np.float64)
-        if cb_type == "proto":
-            res = _apply_matrix_numba(pal, M_PROTO)
-        elif cb_type == "deuto":
-            res = _apply_matrix_numba(pal, M_DEUTO)
-        elif cb_type == "trita":
-            res = _apply_matrix_numba(pal, M_TRITA)
-        else:
-            return palette_list
+        mats = {"proto": M_PROTO, "deuto": M_DEUTO, "trita": M_TRITA}
+        res = _apply_matrix_numba(pal, mats.get(cb_type, M_PROTO)) if cb_type in mats else pal
         return [tuple(int(c) for c in row) for row in res]
-
 else:
-    # ── Pure-Python fallbacks ────────────────────────────────
-    def _relative_luminance_py(r: int, g: int, b: int) -> float:
-        srgb = [r / 255, g / 255, b / 255]
-        lin = [c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4 for c in srgb]
-        return 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2]
+    def _relative_luminance_py(r, g, b):
+        srgb = [r/255, g/255, b/255]
+        lin = [c/12.92 if c<=0.03928 else ((c+0.055)/1.055)**2.4 for c in srgb]
+        return 0.2126*lin[0]+0.7152*lin[1]+0.0722*lin[2]
 
     def calculate_metadata_numba(pal):
-        if not pal:
-            return 0.0, 0.0, 0
-        brightness = 0.0; max_lum = -1.0; min_lum = 256.0
-        sum_r = 0.0; sum_g = 0.0; sum_b = 0.0
-        for r, g, b in pal:
-            lum = 0.299 * r + 0.587 * g + 0.114 * b
-            brightness += lum
-            max_lum = max(max_lum, lum)
-            min_lum = min(min_lum, lum)
-            sum_r += r; sum_g += g; sum_b += b
-        brightness /= len(pal)
-        contrast = max_lum - min_lum
-        dominant = 0
-        if sum_g >= sum_r and sum_g >= sum_b:
-            dominant = 1
-        elif sum_b >= sum_r and sum_b >= sum_g:
-            dominant = 2
+        if not pal: return 0.0, 0.0, 0
+        brightness=0.0; max_lum=-1.0; min_lum=256.0; sum_r=0.0; sum_g=0.0; sum_b=0.0
+        for r,g,b in pal:
+            lum=0.299*r+0.587*g+0.114*b; brightness+=lum
+            max_lum=max(max_lum,lum); min_lum=min(min_lum,lum)
+            sum_r+=r; sum_g+=g; sum_b+=b
+        brightness/=len(pal); contrast=max_lum-min_lum
+        dominant=0
+        if sum_g>=sum_r and sum_g>=sum_b: dominant=1
+        elif sum_b>=sum_r and sum_b>=sum_g: dominant=2
         return brightness, contrast, dominant
 
     def palette_wcag_contrast_numba(pal):
-        if len(pal) < 2:
-            return 1.0
-        lums = [_relative_luminance_py(*c) for c in pal]
-        return (max(lums) + 0.05) / (min(lums) + 0.05)
+        if len(pal)<2: return 1.0
+        lums=[_relative_luminance_py(*c) for c in pal]
+        return (max(lums)+0.05)/(min(lums)+0.05)
 
-    def simulate_colorblind(palette_list: List[Tuple[int, int, int]],
-                            cb_type: str = "proto") -> List[Tuple[int, int, int]]:
+    def simulate_colorblind(palette_list, cb_type="proto"):
         return palette_list
 
-
-# ══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════
 #  UTILITY FUNCTIONS
-# ══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════
 
-def rgb_to_hex(r: int, g: int, b: int) -> str:
-    return f"#{r:02X}{g:02X}{b:02X}"
+def rgb_to_hex(r, g, b): return f"#{r:02X}{g:02X}{b:02X}"
 
-
-def hex_to_rgb(h: str) -> Tuple[int, int, int]:
+def hex_to_rgb(h):
     h = h.lstrip("#")
-    if len(h) == 3:
-        h = h[0] * 2 + h[1] * 2 + h[2] * 2
-    if len(h) != 6 or not all(c in "0123456789abcdefABCDEF" for c in h):
-        raise ValueError(f"Invalid hex color: #{h}")
-    return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
+    if len(h)==3: h = h[0]*2+h[1]*2+h[2]*2
+    if len(h)!=6 or not all(c in "0123456789abcdefABCDEF" for c in h):
+        raise ValueError(f"Invalid hex: #{h}")
+    return tuple(int(h[i:i+2],16) for i in (0,2,4))
 
-
-def calculate_metadata(palette: List[Tuple[int, int, int]]) -> Tuple[float, float, str]:
-    """Return (brightness, contrast, dominant_channel)."""
-    if not palette:
-        return 0.0, 0.0, "R"
+def calculate_metadata(palette):
+    if not palette: return 0.0, 0.0, "R"
     if NUMBA_AVAILABLE:
         pal = np.array(palette, dtype=np.float64)
-        b, c, d = calculate_metadata_numba(pal)
-        return b, c, "RGB"[d]
-    b, c, d = calculate_metadata_numba(palette)
-    return b, c, "RGB"[d]
+        b,c,d = calculate_metadata_numba(pal)
+        return b,c,"RGB"[d]
+    b,c,d = calculate_metadata_numba(palette)
+    return b,c,"RGB"[d]
 
-
-def palette_wcag_contrast(palette: List[Tuple[int, int, int]]) -> float:
-    if len(palette) < 2:
-        return 1.0
+def palette_wcag_contrast(palette):
+    if len(palette)<2: return 1.0
     if NUMBA_AVAILABLE:
-        pal = np.array(palette, dtype=np.float64)
-        return float(palette_wcag_contrast_numba(pal))
+        return float(palette_wcag_contrast_numba(np.array(palette, dtype=np.float64)))
     return palette_wcag_contrast_numba(palette)
 
-
-def rgb_to_hsv(r: int, g: int, b: int) -> Tuple[float, float, float]:
-    r1, g1, b1 = r / 255.0, g / 255.0, b / 255.0
-    mx, mn = max(r1, g1, b1), min(r1, g1, b1)
-    df = mx - mn
-    if mx == mn:
-        h = 0
-    elif mx == r1:
-        h = (60 * ((g1 - b1) / df) + 360) % 360
-    elif mx == g1:
-        h = (60 * ((b1 - r1) / df) + 120) % 360
-    else:
-        h = (60 * ((r1 - g1) / df) + 240) % 360
-    s = 0 if mx == 0 else df / mx
+def rgb_to_hsv(r, g, b):
+    r1,g1,b1 = r/255.0, g/255.0, b/255.0
+    mx,mn = max(r1,g1,b1), min(r1,g1,b1)
+    df = mx-mn
+    if mx==mn: h=0
+    elif mx==r1: h=(60*((g1-b1)/df)+360)%360
+    elif mx==g1: h=(60*((b1-r1)/df)+120)%360
+    else: h=(60*((r1-g1)/df)+240)%360
+    s = 0 if mx==0 else df/mx
     return h, s, mx
 
+def hsv_to_rgb(h, s, v):
+    h %= 360; c = v*s; x = c*(1-abs((h/60)%2-1)); m = v-c
+    if h<60: r,g,b = c,x,0
+    elif h<120: r,g,b = x,c,0
+    elif h<180: r,g,b = 0,c,x
+    elif h<240: r,g,b = 0,x,c
+    elif h<300: r,g,b = x,0,c
+    else: r,g,b = c,0,x
+    return int((r+m)*255), int((g+m)*255), int((b+m)*255)
 
-def hsv_to_rgb(h: float, s: float, v: float) -> Tuple[int, int, int]:
-    h %= 360
-    c = v * s
-    x = c * (1 - abs((h / 60) % 2 - 1))
-    m = v - c
-    if h < 60:
-        r, g, b = c, x, 0
-    elif h < 120:
-        r, g, b = x, c, 0
-    elif h < 180:
-        r, g, b = 0, c, x
-    elif h < 240:
-        r, g, b = 0, x, c
-    elif h < 300:
-        r, g, b = x, 0, c
+def rgb_to_hsl(r, g, b):
+    r1,g1,b1 = r/255.0, g/255.0, b/255.0
+    mx,mn = max(r1,g1,b1), min(r1,g1,b1)
+    l = (mx+mn)/2
+    if mx==mn: h=s=0.0
     else:
-        r, g, b = c, 0, x
-    return int((r + m) * 255), int((g + m) * 255), int((b + m) * 255)
+        d = mx-mn
+        s = d/(2.0-mx-mn) if l>0.5 else d/(mx+mn)
+        if mx==r1: h=(g1-b1)/d+(6 if g1<b1 else 0)
+        elif mx==g1: h=(b1-r1)/d+2
+        else: h=(r1-g1)/d+4
+        h/=6
+    return h*360, s*100, l*100
 
+def lerp_color(c1, c2, t):
+    return (int(c1[0]+(c2[0]-c1[0])*t), int(c1[1]+(c2[1]-c1[1])*t), int(c1[2]+(c2[2]-c1[2])*t))
 
-def rgb_to_hsl(r: int, g: int, b: int) -> Tuple[float, float, float]:
-    r1, g1, b1 = r / 255.0, g / 255.0, b / 255.0
-    mx, mn = max(r1, g1, b1), min(r1, g1, b1)
-    l = (mx + mn) / 2
-    if mx == mn:
-        h = s = 0.0
-    else:
-        d = mx - mn
-        s = d / (2.0 - mx - mn) if l > 0.5 else d / (mx + mn)
-        if mx == r1:
-            h = (g1 - b1) / d + (6 if g1 < b1 else 0)
-        elif mx == g1:
-            h = (b1 - r1) / d + 2
-        else:
-            h = (r1 - g1) / d + 4
-        h /= 6
-    return h * 360, s * 100, l * 100
-
-
-def lerp_color(c1: Tuple[int, int, int],
-               c2: Tuple[int, int, int], t: float) -> Tuple[int, int, int]:
-    return (
-        int(c1[0] + (c2[0] - c1[0]) * t),
-        int(c1[1] + (c2[1] - c1[1]) * t),
-        int(c1[2] + (c2[2] - c1[2]) * t),
-    )
-
-
-def extract_palette_from_image(qimg: QImage, num_colors: int = 5) -> List[Tuple[int, int, int]]:
-    small = qimg.scaled(64, 64, Qt.AspectRatioMode.IgnoreAspectRatio,
-                        Qt.TransformationMode.SmoothTransformation)
-    pixels: List[Tuple[int, int, int]] = []
+def extract_palette_from_image(qimg, num_colors=5):
+    small = qimg.scaled(64,64,Qt.AspectRatioMode.IgnoreAspectRatio,Qt.TransformationMode.SmoothTransformation)
+    pixels = []
     for y in range(small.height()):
         for x in range(small.width()):
-            c = small.pixelColor(x, y)
-            if c.alpha() > 128:
-                pixels.append((c.red(), c.green(), c.blue()))
-    if not pixels:
-        return []
-    rounded_pixels = [(r // 32 * 32, g // 32 * 32, b // 32 * 32) for r, g, b in pixels]
-    counts = Counter(rounded_pixels)
-    top = counts.most_common(num_colors)
-    return [(min(255, r + 16), min(255, g + 16), min(255, b + 16)) for (r, g, b), _ in top]
+            c = small.pixelColor(x,y)
+            if c.alpha()>128: pixels.append((c.red(),c.green(),c.blue()))
+    if not pixels: return []
+    rounded = [(r//32*32,g//32*32,b//32*32) for r,g,b in pixels]
+    counts = Counter(rounded)
+    return [(min(255,r+16),min(255,g+16),min(255,b+16)) for (r,g,b),_ in counts.most_common(num_colors)]
 
-
-def extract_palette_kmeans(qimg: QImage, num_colors: int = 5,
-                           max_iter: int = 20, seed: Optional[int] = None) -> List[Tuple[int, int, int]]:
-    small = qimg.scaled(100, 100, Qt.AspectRatioMode.IgnoreAspectRatio,
-                        Qt.TransformationMode.SmoothTransformation)
-    pixels: List[List[int]] = []
+def extract_palette_kmeans(qimg, num_colors=5, max_iter=20, seed=None):
+    small = qimg.scaled(100,100,Qt.AspectRatioMode.IgnoreAspectRatio,Qt.TransformationMode.SmoothTransformation)
+    pixels = []
     for y in range(small.height()):
         for x in range(small.width()):
-            c = small.pixelColor(x, y)
-            if c.alpha() > 128:
-                pixels.append([c.red(), c.green(), c.blue()])
-    if not pixels:
-        return []
+            c = small.pixelColor(x,y)
+            if c.alpha()>128: pixels.append([c.red(),c.green(),c.blue()])
+    if not pixels: return []
     if NUMBA_AVAILABLE:
         pixels_np = np.array(pixels, dtype=np.float64)
         rng = np.random.RandomState(seed)
-        indices = rng.choice(len(pixels_np), min(num_colors, len(pixels_np)), replace=False)
+        indices = rng.choice(len(pixels_np), min(num_colors,len(pixels_np)), replace=False)
         centers = pixels_np[indices].copy()
         for _ in range(max_iter):
-            dists = np.zeros((len(pixels_np), num_colors))
+            dists = np.zeros((len(pixels_np),num_colors))
             for k in range(num_colors):
                 diff = pixels_np - centers[k]
-                dists[:, k] = np.sum(diff ** 2, axis=1)
+                dists[:,k] = np.sum(diff**2, axis=1)
             labels = np.argmin(dists, axis=1)
             new_centers = np.zeros_like(centers)
             for k in range(num_colors):
-                mask = labels == k
-                if np.any(mask):
-                    new_centers[k] = pixels_np[mask].mean(axis=0)
-                else:
-                    new_centers[k] = centers[k]
-            if np.allclose(centers, new_centers, atol=1.0):
-                break
+                mask = labels==k
+                if np.any(mask): new_centers[k] = pixels_np[mask].mean(axis=0)
+                else: new_centers[k] = centers[k]
+            if np.allclose(centers, new_centers, atol=1.0): break
             centers = new_centers
-        lums = 0.299 * centers[:, 0] + 0.587 * centers[:, 1] + 0.114 * centers[:, 2]
+        lums = 0.299*centers[:,0]+0.587*centers[:,1]+0.114*centers[:,2]
         centers = centers[np.argsort(lums)]
-        return [(int(min(255, max(0, c[0]))), int(min(255, max(0, c[1]))),
-                 int(min(255, max(0, c[2])))) for c in centers]
+        return [(int(min(255,max(0,c[0]))),int(min(255,max(0,c[1]))),int(min(255,max(0,c[2])))) for c in centers]
     return extract_palette_from_image(qimg, num_colors)
 
+MAX_PACK_COLORS = 128 // (3*8)
 
-# ── Pack / Unpack ────────────────────────────────────────────
-
-# BUG-FIX #2: HUGEINT is 128-bit → max 5 colours at 8 bpc.
-MAX_PACK_COLORS = 128 // (3 * 8)  # = 5
-
-
-def pack_palette(palette: List[Tuple[int, int, int]], bits_per_channel: int = 8) -> int:
-    max_colors = 128 // (3 * bits_per_channel)
+def pack_palette(palette, bits_per_channel=8):
+    max_colors = 128 // (3*bits_per_channel)
     if len(palette) > max_colors:
-        raise ValueError(
-            f"Cannot pack {len(palette)} colours into HUGEINT (max {max_colors} at {bits_per_channel} bpc). "
-            "Reduce palette size or use fewer bits."
-        )
+        raise ValueError(f"Cannot pack {len(palette)} colours into HUGEINT (max {max_colors})")
     packed, shift = 0, 0
-    for r, g, b in palette:
-        r, g, b = max(0, min(r, 255)), max(0, min(g, 255)), max(0, min(b, 255))
-        packed |= ((r << (2 * bits_per_channel)) | (g << bits_per_channel) | b) << shift
-        shift += 3 * bits_per_channel
+    for r,g,b in palette:
+        r,g,b = max(0,min(r,255)),max(0,min(g,255)),max(0,min(b,255))
+        packed |= ((r<<(2*bits_per_channel))|(g<<bits_per_channel)|b) << shift
+        shift += 3*bits_per_channel
     return packed
 
-
-def unpack_palette(packed: int, num_colors: int = 5, bits_per_channel: int = 8) -> List[Tuple[int, int, int]]:
-    palette: List[Tuple[int, int, int]] = []
-    mask = (1 << (3 * bits_per_channel)) - 1
-    ch_mask = (1 << bits_per_channel) - 1
+def unpack_palette(packed, num_colors=5, bits_per_channel=8):
+    palette = []; mask = (1<<(3*bits_per_channel))-1; ch_mask = (1<<bits_per_channel)-1
     for _ in range(num_colors):
         cb = packed & mask
-        b_val = cb & ch_mask
-        g_val = (cb >> bits_per_channel) & ch_mask
-        r_val = (cb >> (2 * bits_per_channel)) & ch_mask
-        palette.append((r_val, g_val, b_val))
-        packed >>= 3 * bits_per_channel
+        b_val = cb & ch_mask; g_val = (cb>>bits_per_channel)&ch_mask; r_val = (cb>>(2*bits_per_channel))&ch_mask
+        palette.append((r_val,g_val,b_val))
+        packed >>= 3*bits_per_channel
     return palette
 
-
-# ── Generators ───────────────────────────────────────────────
-
-# BUG-FIX #7: use local Random instead of poisoning global state
-def generate_random_palette(seed: int, num_colors: int = 5) -> List[Tuple[int, int, int]]:
+def generate_random_palette(seed, num_colors=5):
     rng = random.Random(seed)
-    return [(rng.randint(0, 255), rng.randint(0, 255), rng.randint(0, 255)) for _ in range(num_colors)]
+    return [(rng.randint(0,255),rng.randint(0,255),rng.randint(0,255)) for _ in range(num_colors)]
 
-
-def generate_harmony_palette(base_hue: float, harmony_type: str,
-                             num_colors: int = 5, sat: float = 0.75,
-                             val: float = 0.75) -> List[Tuple[int, int, int]]:
-    colors: List[Tuple[int, int, int]] = []
+def generate_harmony_palette(base_hue, harmony_type, num_colors=5, sat=0.75, val=0.75):
+    colors = []
     if harmony_type == "complementary":
         for i in range(num_colors):
-            t = i / max(num_colors - 1, 1)
-            h = (base_hue + t * 180) % 360
-            s = min(sat * (0.7 + 0.3 * math.sin(t * math.pi)), 1.0)
-            v = min(val * (0.5 + 0.5 * (1 - abs(2 * t - 1))), 1.0)
-            colors.append(hsv_to_rgb(h, s, v))
+            t = i/max(num_colors-1,1); h = (base_hue+t*180)%360
+            s = min(sat*(0.7+0.3*math.sin(t*math.pi)),1.0)
+            v = min(val*(0.5+0.5*(1-abs(2*t-1))),1.0)
+            colors.append(hsv_to_rgb(h,s,v))
     elif harmony_type == "analogous":
         for i in range(num_colors):
-            t = i / max(num_colors - 1, 1)
-            h = (base_hue - 30 + t * 60) % 360
-            s = min(sat * (0.8 + 0.2 * math.sin(t * math.pi)), 1.0)
-            v = min(val * (0.7 + 0.3 * math.sin(t * math.pi + 0.5)), 1.0)
-            colors.append(hsv_to_rgb(h, s, v))
+            t = i/max(num_colors-1,1); h = (base_hue-30+t*60)%360
+            s = min(sat*(0.8+0.2*math.sin(t*math.pi)),1.0)
+            v = min(val*(0.7+0.3*math.sin(t*math.pi+0.5)),1.0)
+            colors.append(hsv_to_rgb(h,s,v))
     elif harmony_type == "triadic":
         for i in range(num_colors):
-            seg = i * 3 // num_colors
-            h = (base_hue + seg * 120 + (i % 2) * 15) % 360
-            s = min(sat * (0.7 + 0.3 * (i % 2)), 1.0)
-            v = min(val * (0.6 + 0.4 * ((i + 1) % 2)), 1.0)
-            colors.append(hsv_to_rgb(h, s, v))
+            seg = i*3//num_colors; h = (base_hue+seg*120+(i%2)*15)%360
+            s = min(sat*(0.7+0.3*(i%2)),1.0); v = min(val*(0.6+0.4*((i+1)%2)),1.0)
+            colors.append(hsv_to_rgb(h,s,v))
     elif harmony_type == "split_complementary":
-        angles = [0, 150, 210]
+        angles = [0,150,210]
         for i in range(num_colors):
-            h = (base_hue + angles[i % 3] + (i // 3) * 12) % 360
-            s = min(sat * (0.7 + 0.3 * (i % 2)), 1.0)
-            v = min(val * (0.6 + 0.4 * ((i + 1) % 2)), 1.0)
-            colors.append(hsv_to_rgb(h, s, v))
+            h = (base_hue+angles[i%3]+(i//3)*12)%360
+            s = min(sat*(0.7+0.3*(i%2)),1.0); v = min(val*(0.6+0.4*((i+1)%2)),1.0)
+            colors.append(hsv_to_rgb(h,s,v))
     elif harmony_type == "monochromatic":
         for i in range(num_colors):
-            t = i / max(num_colors - 1, 1)
-            s = min(sat * (0.3 + 0.7 * t), 1.0)
-            v = min(0.3 + 0.7 * (1 - t), 1.0)
-            colors.append(hsv_to_rgb(base_hue, s, v))
+            t = i/max(num_colors-1,1); s = min(sat*(0.3+0.7*t),1.0); v = min(0.3+0.7*(1-t),1.0)
+            colors.append(hsv_to_rgb(base_hue,s,v))
     elif harmony_type == "tetradic":
         for i in range(num_colors):
-            h = (base_hue + i * 90) % 360
-            s = min(sat * (0.7 + 0.3 * math.sin(i * math.pi / 2)), 1.0)
-            v = min(val * (0.6 + 0.4 * math.cos(i * math.pi / 3)), 1.0)
-            colors.append(hsv_to_rgb(h, s, v))
+            h = (base_hue+i*90)%360; s = min(sat*(0.7+0.3*math.sin(i*math.pi/2)),1.0)
+            v = min(val*(0.6+0.4*math.cos(i*math.pi/3)),1.0)
+            colors.append(hsv_to_rgb(h,s,v))
     return colors[:num_colors]
 
-
-def generate_variations(palette: List[Tuple[int, int, int]],
-                        variation: str = "lighter",
-                        strength: float = 0.3) -> List[Tuple[int, int, int]]:
-    result: List[Tuple[int, int, int]] = []
-    for r, g, b in palette:
-        h, s, v = rgb_to_hsv(r, g, b)
-        if variation == "lighter":
-            v = min(1.0, v + strength * (1.0 - v))
-        elif variation == "darker":
-            v = max(0.0, v * (1.0 - strength))
-        elif variation == "muted":
-            s = max(0.0, s * (1.0 - strength))
-        elif variation == "vivid":
-            s = min(1.0, s + strength * (1.0 - s))
-        elif variation == "pastel":
-            s = max(0.0, s * 0.4)
-            v = min(1.0, v + 0.3 * (1.0 - v))
-        elif variation == "warm":
-            h = (h + 15 * strength) % 360
-        elif variation == "cool":
-            h = (h - 15 * strength) % 360
-        result.append(hsv_to_rgb(h, s, v))
+def generate_variations(palette, variation="lighter", strength=0.3):
+    result = []
+    for r,g,b in palette:
+        h,s,v = rgb_to_hsv(r,g,b)
+        if variation=="lighter": v = min(1.0, v+strength*(1.0-v))
+        elif variation=="darker": v = max(0.0, v*(1.0-strength))
+        elif variation=="muted": s = max(0.0, s*(1.0-strength))
+        elif variation=="vivid": s = min(1.0, s+strength*(1.0-s))
+        elif variation=="pastel": s = max(0.0, s*0.4); v = min(1.0, v+0.3*(1.0-v))
+        elif variation=="warm": h = (h+15*strength)%360
+        elif variation=="cool": h = (h-15*strength)%360
+        result.append(hsv_to_rgb(h,s,v))
     return result
 
-
-def find_duplicate_colors(palette: List[Tuple[int, int, int]],
-                          threshold: float = 15) -> List[Tuple[int, int, float]]:
-    dupes: List[Tuple[int, int, float]] = []
+def find_duplicate_colors(palette, threshold=15):
+    dupes = []
     for i in range(len(palette)):
-        for j in range(i + 1, len(palette)):
-            r1, g1, b1 = palette[i]
-            r2, g2, b2 = palette[j]
-            dist = math.sqrt((r2 - r1) ** 2 + (g2 - g1) ** 2 + (b2 - b1) ** 2)
-            if dist < threshold:
-                dupes.append((i, j, dist))
+        for j in range(i+1,len(palette)):
+            r1,g1,b1 = palette[i]; r2,g2,b2 = palette[j]
+            dist = math.sqrt((r2-r1)**2+(g2-g1)**2+(b2-b1)**2)
+            if dist < threshold: dupes.append((i,j,dist))
     return dupes
 
-
-def merge_palettes(*palettes: List[Tuple[int, int, int]],
-                   mode: str = "concat",
-                   max_colors: int = 12) -> List[Tuple[int, int, int]]:
-    if mode == "concat":
-        combined: List[Tuple[int, int, int]] = []
-        for p in palettes:
-            combined.extend(p)
+def merge_palettes(*palettes, mode="concat", max_colors=12):
+    if mode=="concat":
+        combined = []
+        for p in palettes: combined.extend(p)
         return combined[:max_colors]
-    elif mode == "alternate":
-        combined: List[Tuple[int, int, int]] = []
-        iters = [iter(p) for p in palettes]
+    elif mode=="alternate":
+        combined = []; iters = [iter(p) for p in palettes]
         while len(combined) < max_colors:
             for it in iters:
-                try:
-                    combined.append(next(it))
-                except StopIteration:
-                    pass
-            if all(it is None for it in iters):
-                break
+                try: combined.append(next(it))
+                except StopIteration: pass
         return combined[:max_colors]
-    elif mode == "average":
-        # BUG-FIX #15: use round() instead of truncating //
-        n = min(len(p) for p in palettes) if palettes else 0
-        result: List[Tuple[int, int, int]] = []
+    elif mode=="average":
+        n = min(len(p) for p in palettes) if palettes else 0; result = []
         for i in range(n):
-            avg_r = round(sum(p[i][0] for p in palettes) / len(palettes))
-            avg_g = round(sum(p[i][1] for p in palettes) / len(palettes))
-            avg_b = round(sum(p[i][2] for p in palettes) / len(palettes))
-            result.append((avg_r, avg_g, avg_b))
+            avg_r = round(sum(p[i][0] for p in palettes)/len(palettes))
+            avg_g = round(sum(p[i][1] for p in palettes)/len(palettes))
+            avg_b = round(sum(p[i][2] for p in palettes)/len(palettes))
+            result.append((avg_r,avg_g,avg_b))
         return result
     return palettes[0] if palettes else []
 
+def sort_palette(palette, mode="hue"):
+    def key_hue(c): return rgb_to_hsv(*c)[0]
+    def key_bright(c): return 0.299*c[0]+0.587*c[1]+0.114*c[2]
+    def key_sat(c): return rgb_to_hsv(*c)[1]
+    return sorted(palette, key={"hue":key_hue,"brightness":key_bright,"saturation":key_sat}.get(mode, key_hue))
 
-def sort_palette(palette: List[Tuple[int, int, int]],
-                 mode: str = "hue") -> List[Tuple[int, int, int]]:
-    def key_hue(c: Tuple[int, int, int]) -> float:
-        return rgb_to_hsv(*c)[0]
-
-    def key_bright(c: Tuple[int, int, int]) -> float:
-        return 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2]
-
-    def key_sat(c: Tuple[int, int, int]) -> float:
-        return rgb_to_hsv(*c)[1]
-
-    return sorted(palette, key={"hue": key_hue, "brightness": key_bright,
-                                "saturation": key_sat}.get(mode, key_hue))
-
-
-# ══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════
 #  FILE I/O
-# ══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════
 
-def parse_map_file(filepath: str) -> List[Tuple[int, int, int]]:
-    palette: List[Tuple[int, int, int]] = []
+def parse_map_file(filepath):
+    palette = []
     try:
-        with open(filepath, "r") as f:
+        with open(filepath,"r") as f:
             for line in f:
                 line = line.strip()
-                if not line or line[0] in ("#", ";"):
-                    continue
+                if not line or line[0] in ("#",";"): continue
                 parts = line.split()
-                if len(parts) >= 3:
+                if len(parts)>=3:
                     try:
-                        r, g, b = int(parts[0]), int(parts[1]), int(parts[2])
-                        if 0 <= r <= 255 and 0 <= g <= 255 and 0 <= b <= 255:
-                            palette.append((r, g, b))
-                    except ValueError:
-                        continue
-    except Exception as e:
-        logger.error("Error reading %s: %s", filepath, e)
+                        r,g,b = int(parts[0]),int(parts[1]),int(parts[2])
+                        if 0<=r<=255 and 0<=g<=255 and 0<=b<=255: palette.append((r,g,b))
+                    except ValueError: continue
+    except Exception as e: logger.error("Error reading %s: %s",filepath,e)
     return palette
 
-
-def save_map_file(palette: List[Tuple[int, int, int]], filepath: str) -> bool:
+def save_map_file(palette, filepath):
     try:
-        with open(filepath, "w") as f:
+        with open(filepath,"w") as f:
             f.write("# Generated by DuckPalette\n")
-            for r, g, b in palette:
-                f.write(f"{r:3d} {g:3d} {b:3d}\n")
+            for r,g,b in palette: f.write(f"{r:3d} {g:3d} {b:3d}\n")
         return True
-    except Exception as e:
-        logger.error("Error writing %s: %s", filepath, e)
-        return False
+    except Exception as e: logger.error("Error writing %s: %s",filepath,e); return False
 
-
-# BUG-FIX #12: ASE parser — use block-data buffer + bounds checking + UTF-16 name
-def parse_ase_file(filepath: str) -> List[Tuple[int, int, int]]:
-    palette: List[Tuple[int, int, int]] = []
+def parse_ase_file(filepath):
+    palette = []
     try:
-        with open(filepath, "rb") as f:
+        with open(filepath,"rb") as f:
             sig = f.read(4)
-            if sig != b"ASEF":
-                return palette
-            f.read(4)  # version
-            n_blocks = struct.unpack(">I", f.read(4))[0]
+            if sig != b"ASEF": return palette
+            f.read(4); n_blocks = struct.unpack(">I",f.read(4))[0]
             for _ in range(n_blocks):
-                btype = struct.unpack(">H", f.read(2))[0]
-                blen = struct.unpack(">I", f.read(4))[0]
+                btype = struct.unpack(">H",f.read(2))[0]
+                blen = struct.unpack(">I",f.read(4))[0]
                 block_data = f.read(blen)
-                if btype == 0x0001 and len(block_data) >= 6:
+                if btype==0x0001 and len(block_data)>=6:
                     offset = 0
-                    name_len = struct.unpack(">H", block_data[offset:offset + 2])[0]
-                    offset += 2
-                    # ASE names are UTF-16-BE → name_len chars × 2 bytes each
-                    offset += name_len * 2
-                    if offset + 4 <= len(block_data):
-                        color_model = block_data[offset:offset + 4].decode(
-                            "ascii", errors="replace").strip("\x00")
-                        offset += 4
-                        if color_model == "RGB " and offset + 12 <= len(block_data):
-                            r, g, b = struct.unpack(">fff", block_data[offset:offset + 12])
-                            palette.append((
-                                min(255, max(0, int(r * 255))),
-                                min(255, max(0, int(g * 255))),
-                                min(255, max(0, int(b * 255))),
-                            ))
-                        elif color_model == "CMYK" and offset + 16 <= len(block_data):
-                            c, m, y, k = struct.unpack(">ffff", block_data[offset:offset + 16])
-                            rv = int(255 * (1 - c) * (1 - k))
-                            gv = int(255 * (1 - m) * (1 - k))
-                            bv = int(255 * (1 - y) * (1 - k))
-                            palette.append((
-                                max(0, min(255, rv)),
-                                max(0, min(255, gv)),
-                                max(0, min(255, bv)),
-                            ))
-                        elif color_model == "Gray" and offset + 4 <= len(block_data):
-                            gv = struct.unpack(">f", block_data[offset:offset + 4])[0]
-                            v = min(255, max(0, int(gv * 255)))
-                            palette.append((v, v, v))
-                # Group start / end blocks are simply skipped (data already read)
-    except Exception as e:
-        logger.error("ASE parse error: %s", e)
+                    name_len = struct.unpack(">H",block_data[offset:offset+2])[0]; offset += 2
+                    offset += name_len*2
+                    if offset+4 <= len(block_data):
+                        color_model = block_data[offset:offset+4].decode("ascii",errors="replace").strip("\x00"); offset += 4
+                        if color_model=="RGB " and offset+12<=len(block_data):
+                            r,g,b = struct.unpack(">fff",block_data[offset:offset+12])
+                            palette.append((min(255,max(0,int(r*255))),min(255,max(0,int(g*255))),min(255,max(0,int(b*255)))))
+                        elif color_model=="CMYK" and offset+16<=len(block_data):
+                            c,m,y,k = struct.unpack(">ffff",block_data[offset:offset+16])
+                            palette.append((max(0,min(255,int(255*(1-c)*(1-k)))),max(0,min(255,int(255*(1-m)*(1-k)))),max(0,min(255,int(255*(1-y)*(1-k))))))
+                        elif color_model=="Gray" and offset+4<=len(block_data):
+                            gv = struct.unpack(">f",block_data[offset:offset+4])[0]; v = min(255,max(0,int(gv*255)))
+                            palette.append((v,v,v))
+    except Exception as e: logger.error("ASE parse error: %s",e)
     return palette
 
-
-# BUG-FIX #5: don't treat comment lines as hex colours
-def parse_hex_list(filepath: str) -> List[Tuple[int, int, int]]:
-    palette: List[Tuple[int, int, int]] = []
-    with open(filepath, "r") as f:
+def parse_hex_list(filepath):
+    palette = []
+    with open(filepath,"r") as f:
         for line in f:
             line = line.strip().rstrip(",").rstrip(";")
-            if line.startswith("#") and len(line.lstrip("#")) in (3, 6):
-                try:
-                    palette.append(hex_to_rgb(line))
-                except ValueError:
-                    continue
-            elif len(line) == 6 and all(c in "0123456789abcdefABCDEF" for c in line):
-                try:
-                    palette.append(hex_to_rgb("#" + line))
-                except ValueError:
-                    continue
+            if line.startswith("#") and len(line.lstrip("#")) in (3,6):
+                try: palette.append(hex_to_rgb(line))
+                except ValueError: continue
+            elif len(line)==6 and all(c in "0123456789abcdefABCDEF" for c in line):
+                try: palette.append(hex_to_rgb("#"+line))
+                except ValueError: continue
     return palette
 
-
-def parse_csv_file(filepath: str) -> List[Tuple[int, int, int]]:
-    palette: List[Tuple[int, int, int]] = []
-    with open(filepath, "r") as f:
+def parse_csv_file(filepath):
+    palette = []
+    with open(filepath,"r") as f:
         reader = csv.reader(f)
         for row in reader:
-            if len(row) >= 3:
+            if len(row)>=3:
                 try:
-                    r, g, b = int(row[0]), int(row[1]), int(row[2])
-                    if 0 <= r <= 255 and 0 <= g <= 255 and 0 <= b <= 255:
-                        palette.append((r, g, b))
-                except ValueError:
-                    pass
-            elif len(row) >= 1:
-                try:
-                    palette.append(hex_to_rgb(row[0].strip()))
-                except ValueError:
-                    pass
+                    r,g,b = int(row[0]),int(row[1]),int(row[2])
+                    if 0<=r<=255 and 0<=g<=255 and 0<=b<=255: palette.append((r,g,b))
+                except ValueError: pass
+            elif len(row)>=1:
+                try: palette.append(hex_to_rgb(row[0].strip()))
+                except ValueError: pass
     return palette
 
-
-# ── Exporters ────────────────────────────────────────────────
-
-def export_as_css(palette: List[Tuple[int, int, int]], filepath: str) -> bool:
+def export_as_css(palette, filepath):
     try:
-        with open(filepath, "w") as f:
+        with open(filepath,"w") as f:
             f.write(":root {\n")
-            for i, (r, g, b) in enumerate(palette):
-                f.write(f"  --color-{i + 1}: {rgb_to_hex(r, g, b)};\n")
-                f.write(f"  --color-{i + 1}-rgb: {r}, {g}, {b};\n")
+            for i,(r,g,b) in enumerate(palette):
+                f.write(f"  --color-{i+1}: {rgb_to_hex(r,g,b)};\n")
+                f.write(f"  --color-{i+1}-rgb: {r}, {g}, {b};\n")
             f.write("}\n")
         return True
-    except Exception as e:
-        logger.error("CSS export error: %s", e)
-        return False
+    except Exception as e: logger.error("CSS export error: %s",e); return False
 
-
-def export_as_json(palette: List[Tuple[int, int, int]], filepath: str) -> bool:
+def export_as_json(palette, filepath):
     try:
-        with open(filepath, "w") as f:
-            json.dump([{"hex": rgb_to_hex(*c), "rgb": list(c)} for c in palette], f, indent=2)
+        with open(filepath,"w") as f: json.dump([{"hex":rgb_to_hex(*c),"rgb":list(c)} for c in palette],f,indent=2)
         return True
-    except Exception as e:
-        logger.error("JSON export error: %s", e)
-        return False
+    except Exception as e: logger.error("JSON export error: %s",e); return False
 
-
-# BUG-FIX #1: return True must be OUTSIDE the for-loop
-def export_as_gpl(palette: List[Tuple[int, int, int]],
-                  name: str, filepath: str) -> bool:
+def export_as_gpl(palette, name, filepath):
     try:
-        with open(filepath, "w") as f:
-            f.write("GIMP Palette\n")
-            f.write(f"Name: {name}\n")
-            f.write(f"Columns: {len(palette)}\n#\n")
-            for r, g, b in palette:
-                f.write(f"{r:3d} {g:3d} {b:3d}\t{rgb_to_hex(r, g, b)}\n")
+        with open(filepath,"w") as f:
+            f.write("GIMP Palette\n"); f.write(f"Name: {name}\n"); f.write(f"Columns: {len(palette)}\n#\n")
+            for r,g,b in palette: f.write(f"{r:3d} {g:3d} {b:3d}\t{rgb_to_hex(r,g,b)}\n")
         return True
-    except Exception as e:
-        logger.error("GPL export error: %s", e)
-        return False
+    except Exception as e: logger.error("GPL export error: %s",e); return False
 
-
-def export_as_scss(palette: List[Tuple[int, int, int]], filepath: str) -> bool:
+def export_as_scss(palette, filepath):
     try:
-        with open(filepath, "w") as f:
+        with open(filepath,"w") as f:
             f.write("// Generated by DuckPalette\n$palette: (\n")
-            for i, (r, g, b) in enumerate(palette):
-                f.write(f'  "{i + 1}": ({r}, {g}, {b}),\n')
+            for i,(r,g,b) in enumerate(palette): f.write(f'  "{i+1}": ({r}, {g}, {b}),\n')
             f.write(");\n\n")
-            for i, (r, g, b) in enumerate(palette):
-                f.write(f"$color-{i + 1}: rgb({r}, {g}, {b});\n")
+            for i,(r,g,b) in enumerate(palette): f.write(f"$color-{i+1}: rgb({r}, {g}, {b});\n")
         return True
-    except Exception as e:
-        logger.error("SCSS export error: %s", e)
-        return False
+    except Exception as e: logger.error("SCSS export error: %s",e); return False
 
-
-def export_as_tailwind(palette: List[Tuple[int, int, int]], filepath: str) -> bool:
+def export_as_tailwind(palette, filepath):
     try:
-        with open(filepath, "w") as f:
+        with open(filepath,"w") as f:
             f.write("// tailwind.config.js\nmodule.exports = {\n  theme: {\n    extend: {\n      colors: {\n")
-            for i, (r, g, b) in enumerate(palette):
-                f.write(f'        "palette-{i + 1}": "rgb({r} {g} {b})",\n')
+            for i,(r,g,b) in enumerate(palette): f.write(f'        "palette-{i+1}": "rgb({r} {g} {b})",\n')
             f.write("      },\n    },\n  },\n};\n")
         return True
-    except Exception as e:
-        logger.error("Tailwind export error: %s", e)
-        return False
+    except Exception as e: logger.error("Tailwind export error: %s",e); return False
 
-
-# BUG-FIX #14: last SVG rectangle now fills to the right edge
-def export_as_svg(palette: List[Tuple[int, int, int]], filepath: str) -> bool:
+def export_as_svg(palette, filepath):
     try:
-        n = len(palette)
-        w, h = max(400, n * 80), 120
-        with open(filepath, "w") as f:
+        n = len(palette); w,h = max(400,n*80),120
+        with open(filepath,"w") as f:
             f.write(f'<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}">\n')
-            for i, (r, g, b) in enumerate(palette):
-                x_start = i * (w // n)
-                x_end = ((i + 1) * w) // n if i < n - 1 else w
-                sw = x_end - x_start
-                f.write(f'  <rect x="{x_start}" y="0" width="{sw}" height="{h}" '
-                        f'fill="{rgb_to_hex(r, g, b)}"/>\n')
-                lum = 0.299 * r + 0.587 * g + 0.114 * b
-                tc = "#000" if lum > 128 else "#fff"
-                f.write(f'  <text x="{x_start + sw // 2}" y="{h // 2}" fill="{tc}" '
-                        f'font-size="11" text-anchor="middle" '
-                        f'dominant-baseline="middle">{rgb_to_hex(r, g, b)}</text>\n')
+            for i,(r,g,b) in enumerate(palette):
+                x_start = i*(w//n); x_end = ((i+1)*w)//n if i<n-1 else w; sw = x_end-x_start
+                f.write(f'  <rect x="{x_start}" y="0" width="{sw}" height="{h}" fill="{rgb_to_hex(r,g,b)}"/>\n')
+                lum = 0.299*r+0.587*g+0.114*b; tc = "#000" if lum>128 else "#fff"
+                f.write(f'  <text x="{x_start+sw//2}" y="{h//2}" fill="{tc}" font-size="11" text-anchor="middle" dominant-baseline="middle">{rgb_to_hex(r,g,b)}</text>\n')
             f.write("</svg>\n")
         return True
-    except Exception as e:
-        logger.error("SVG export error: %s", e)
-        return False
+    except Exception as e: logger.error("SVG export error: %s",e); return False
 
-
-def export_as_android_xml(palette: List[Tuple[int, int, int]], filepath: str) -> bool:
+def export_as_android_xml(palette, filepath):
     try:
-        with open(filepath, "w") as f:
+        with open(filepath,"w") as f:
             f.write('<?xml version="1.0" encoding="utf-8"?>\n<resources>\n')
-            for i, (r, g, b) in enumerate(palette):
-                f.write(f'    <color name="palette_color_{i + 1}">{rgb_to_hex(r, g, b)}</color>\n')
+            for i,(r,g,b) in enumerate(palette): f.write(f'    <color name="palette_color_{i+1}">{rgb_to_hex(r,g,b)}</color>\n')
             f.write("</resources>\n")
         return True
-    except Exception as e:
-        logger.error("Android XML export error: %s", e)
-        return False
+    except Exception as e: logger.error("Android XML export error: %s",e); return False
 
-
-def export_as_python(palette: List[Tuple[int, int, int]], filepath: str) -> bool:
+def export_as_python(palette, filepath):
     try:
-        with open(filepath, "w") as f:
+        with open(filepath,"w") as f:
             f.write("# Generated by DuckPalette\n\nPALETTE = [\n")
-            for r, g, b in palette:
-                f.write(f"    ({r:3d}, {g:3d}, {b:3d}),  # {rgb_to_hex(r, g, b)}\n")
+            for r,g,b in palette: f.write(f"    ({r:3d}, {g:3d}, {b:3d}),  # {rgb_to_hex(r,g,b)}\n")
             f.write("]\n\nPALETTE_HEX = [\n")
-            for r, g, b in palette:
-                f.write(f'    "{rgb_to_hex(r, g, b)}",\n')
+            for r,g,b in palette: f.write(f'    "{rgb_to_hex(r,g,b)}",\n')
             f.write("]\n")
         return True
-    except Exception as e:
-        logger.error("Python export error: %s", e)
-        return False
+    except Exception as e: logger.error("Python export error: %s",e); return False
 
-
-# ══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════
 #  DATABASE
-# ══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════
 
 class PaletteDB:
-    def __init__(self, db_file: str = "palettes.duckdb"):
+    def __init__(self, db_file="palettes.duckdb"):
         self.db_file = db_file
         self.conn = duckdb.connect(database=db_file, read_only=False)
         self._init_db()
 
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        self.close()
-
+    def __enter__(self): return self
+    def __exit__(self,*exc): self.close()
     def close(self):
-        try:
-            self.conn.close()
-        except Exception:
-            pass
-
-    def __del__(self):
-        self.close()
+        try: self.conn.close()
+        except: pass
+    def __del__(self): self.close()
 
     def _safe_rollback(self):
-        """Clear an aborted transaction so subsequent queries can proceed."""
-        try:
-            self.conn.rollback()
-        except Exception:
-            pass
+        try: self.conn.rollback()
+        except: pass
 
-    def _column_exists(self, table_name: str, column_name: str) -> bool:
-        """Check whether a column already exists in a table."""
+    def _column_exists(self, table_name, column_name):
         try:
-            result = self.conn.execute(
-                "SELECT COUNT(*) FROM information_schema.columns "
-                "WHERE table_name=? AND column_name=?",
-                [table_name.lower(), column_name.lower()],
-            ).fetchone()
+            result = self.conn.execute("SELECT COUNT(*) FROM information_schema.columns WHERE table_name=? AND column_name=?",
+                [table_name.lower(), column_name.lower()]).fetchone()
             return result[0] > 0
-        except Exception:
-            self._safe_rollback()
-            return False
+        except: self._safe_rollback(); return False
 
     def _init_db(self):
-        # Create sequence — safe to re-run
-        try:
-            self.conn.execute("CREATE SEQUENCE IF NOT EXISTS palette_id_seq START 1")
-        except Exception:
-            self._safe_rollback()
-
-        # Create table with ALL known columns up front
+        try: self.conn.execute("CREATE SEQUENCE IF NOT EXISTS palette_id_seq START 1")
+        except: self._safe_rollback()
         try:
             self.conn.execute('''CREATE TABLE IF NOT EXISTS palettes (
                 id INTEGER PRIMARY KEY DEFAULT nextval('palette_id_seq'),
@@ -884,297 +611,168 @@ class PaletteDB:
                 bits_per_channel INTEGER, packed_palette HUGEINT,
                 brightness DOUBLE, contrast DOUBLE, dominant TEXT,
                 favorite BOOLEAN DEFAULT FALSE, tags TEXT DEFAULT '')''')
-        except Exception:
-            self._safe_rollback()
-
-        # Migrate older tables that were created without `favorite` / `tags`
-        for col_name, col_def in [
-            ("favorite", "BOOLEAN DEFAULT FALSE"),
-            ("tags", "TEXT DEFAULT ''"),
-        ]:
-            if not self._column_exists("palettes", col_name):
-                try:
-                    self.conn.execute(
-                        f"ALTER TABLE palettes ADD COLUMN {col_name} {col_def}")
-                except duckdb.CatalogException:
-                    self._safe_rollback()  # another process added it first
-                except duckdb.Error:
-                    self._safe_rollback()
-
-        # Sync sequence with existing max id so next INSERT won't collide
+        except: self._safe_rollback()
+        for col_name, col_def in [("favorite","BOOLEAN DEFAULT FALSE"),("tags","TEXT DEFAULT ''")]:
+            if not self._column_exists("palettes",col_name):
+                try: self.conn.execute(f"ALTER TABLE palettes ADD COLUMN {col_name} {col_def}")
+                except: self._safe_rollback()
         try:
-            row = self.conn.execute(
-                "SELECT MAX(id) FROM palettes").fetchone()
-            if row and row[0] is not None:
-                self.conn.execute(
-                    f"ALTER SEQUENCE palette_id_seq RESTART WITH {row[0] + 1}")
-        except Exception:
-            self._safe_rollback()
+            row = self.conn.execute("SELECT MAX(id) FROM palettes").fetchone()
+            if row and row[0] is not None: self.conn.execute(f"ALTER SEQUENCE palette_id_seq RESTART WITH {row[0]+1}")
+        except: self._safe_rollback()
 
-    # ── CRUD Methods ────────────────────────────────────────
-
-    def insert_palette(self, palette: List[Tuple[int, int, int]],
-                       name: str = "User Palette",
-                       pid: Optional[int] = None,
-                       seed: Optional[int] = None) -> Optional[int]:
-        if not palette:
-            return None
-        b, c, d = calculate_metadata(palette)
-        packed = pack_palette(palette)
+    def insert_palette(self, palette, name="User Palette", pid=None, seed=None):
+        if not palette: return None
+        b,c,d = calculate_metadata(palette); packed = pack_palette(palette)
         if pid is None:
             result = self.conn.execute(
-                '''INSERT INTO palettes
-                   (name,seed,num_colors,bits_per_channel,packed_palette,brightness,contrast,dominant)
-                   VALUES (?,?,?,?,?,?,?,?) RETURNING id''',
-                [name, seed, len(palette), 8, packed, b, c, d],
-            )
+                'INSERT INTO palettes (name,seed,num_colors,bits_per_channel,packed_palette,brightness,contrast,dominant) VALUES (?,?,?,?,?,?,?,?) RETURNING id',
+                [name,seed,len(palette),8,packed,b,c,d])
             pid = result.fetchone()[0]
         else:
             self.conn.execute(
-                '''INSERT INTO palettes
-                   (id,name,seed,num_colors,bits_per_channel,packed_palette,brightness,contrast,dominant)
-                   VALUES (?,?,?,?,?,?,?,?,?)''',
-                [pid, name, seed, len(palette), 8, packed, b, c, d],
-            )
+                'INSERT INTO palettes (id,name,seed,num_colors,bits_per_channel,packed_palette,brightness,contrast,dominant) VALUES (?,?,?,?,?,?,?,?,?)',
+                [pid,name,seed,len(palette),8,packed,b,c,d])
         return pid
 
-    def update_palette(self, pid: int, palette: List[Tuple[int, int, int]],
-                       name: str) -> bool:
-        if not palette:
-            return False
-        b, c, d = calculate_metadata(palette)
-        packed = pack_palette(palette)
-        self.conn.execute(
-            '''UPDATE palettes
-               SET name=?,packed_palette=?,num_colors=?,brightness=?,contrast=?,dominant=?
-               WHERE id=?''',
-            [name, packed, len(palette), b, c, d, pid],
-        )
+    def update_palette(self, pid, palette, name):
+        if not palette: return False
+        b,c,d = calculate_metadata(palette); packed = pack_palette(palette)
+        self.conn.execute('UPDATE palettes SET name=?,packed_palette=?,num_colors=?,brightness=?,contrast=?,dominant=? WHERE id=?',
+            [name,packed,len(palette),b,c,d,pid])
         return True
 
-    def rename_palette(self, pid: int, name: str):
-        self.conn.execute("UPDATE palettes SET name=? WHERE id=?", [name, pid])
+    def rename_palette(self, pid, name): self.conn.execute("UPDATE palettes SET name=? WHERE id=?", [name,pid])
+    def delete_palette(self, pid): self.conn.execute("DELETE FROM palettes WHERE id=?", [pid])
+    def toggle_favorite(self, pid): self.conn.execute("UPDATE palettes SET favorite = NOT favorite WHERE id=?", [pid])
+    def set_tags(self, pid, tags_str): self.conn.execute("UPDATE palettes SET tags=? WHERE id=?", [tags_str,pid])
 
-    def delete_palette(self, pid: int):
-        self.conn.execute("DELETE FROM palettes WHERE id=?", [pid])
-
-    def toggle_favorite(self, pid: int):
-        self.conn.execute(
-            "UPDATE palettes SET favorite = NOT favorite WHERE id=?", [pid])
-
-    def set_tags(self, pid: int, tags_str: str):
-        self.conn.execute(
-            "UPDATE palettes SET tags=? WHERE id=?", [tags_str, pid])
-
-    # BUG-FIX #3: don't use seed as pid
-    def generate_and_insert(self, seed: int, num_colors: int = 5) -> int:
+    def generate_and_insert(self, seed, num_colors=5):
         palette = generate_random_palette(seed, num_colors)
         return self.insert_palette(palette, name=f"Gen_{seed}", seed=seed)
 
-    def search(self, *, min_bright: Optional[float] = None,
-               max_bright: Optional[float] = None,
-               dominant: Optional[str] = None,
-               favorite_only: bool = False,
-               tag: Optional[str] = None,
-               name_query: Optional[str] = None,
-               limit: int = 100) -> list:
-        q = ('SELECT id,name,brightness,contrast,dominant,num_colors,'
-             'packed_palette,tags,favorite FROM palettes WHERE 1=1')
-        p: list = []
-        if min_bright is not None:
-            q += ' AND brightness>=?'
-            p.append(min_bright)
-        if max_bright is not None:
-            q += ' AND brightness<=?'
-            p.append(max_bright)
-        if dominant:
-            q += ' AND dominant=?'
-            p.append(dominant)
-        if favorite_only:
-            q += ' AND favorite=TRUE'
-        if tag:
-            q += ' AND tags LIKE ?'
-            p.append(f'%{tag}%')
-        if name_query:
-            q += ' AND name LIKE ?'
-            p.append(f'%{name_query}%')
-        q += ' ORDER BY id DESC LIMIT ?'
-        p.append(limit)
-        return self.conn.execute(q, p).fetchall()
+    def search(self, *, min_bright=None, max_bright=None, dominant=None, favorite_only=False, tag=None, name_query=None, limit=100):
+        q = 'SELECT id,name,brightness,contrast,dominant,num_colors,packed_palette,tags,favorite FROM palettes WHERE 1=1'
+        p = []
+        if min_bright is not None: q+=' AND brightness>=?'; p.append(min_bright)
+        if max_bright is not None: q+=' AND brightness<=?'; p.append(max_bright)
+        if dominant: q+=' AND dominant=?'; p.append(dominant)
+        if favorite_only: q+=' AND favorite=TRUE'
+        if tag: q+=' AND tags LIKE ?'; p.append(f'%{tag}%')
+        if name_query: q+=' AND name LIKE ?'; p.append(f'%{name_query}%')
+        q += ' ORDER BY id DESC LIMIT ?'; p.append(limit)
+        return self.conn.execute(q,p).fetchall()
 
-    def get_palette_by_id(self, pid: int) -> Optional[List[Tuple[int, int, int]]]:
-        row = self.conn.execute(
-            "SELECT packed_palette,num_colors,bits_per_channel FROM palettes WHERE id=?",
-            [pid],
-        ).fetchone()
-        return unpack_palette(row[0], row[1], row[2]) if row else None
+    def get_palette_by_id(self, pid):
+        row = self.conn.execute("SELECT packed_palette,num_colors,bits_per_channel FROM palettes WHERE id=?",[pid]).fetchone()
+        return unpack_palette(row[0],row[1],row[2]) if row else None
 
-    def get_name_by_id(self, pid: int) -> Optional[str]:
-        row = self.conn.execute(
-            "SELECT name FROM palettes WHERE id=?", [pid]).fetchone()
+    def get_name_by_id(self, pid):
+        row = self.conn.execute("SELECT name FROM palettes WHERE id=?",[pid]).fetchone()
         return row[0] if row else None
 
-    def count(self) -> int:
-        return self.conn.execute("SELECT COUNT(*) FROM palettes").fetchone()[0]
+    def count(self): return self.conn.execute("SELECT COUNT(*) FROM palettes").fetchone()[0]
 
-
-# ══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════
 #  CONTROLLER
-# ══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════
 
 class PaletteController:
-    def __init__(self):
-        self.db = PaletteDB()
+    def __init__(self): self.db = PaletteDB()
 
-    def import_file_to_db(self, filepath: str):
-        palette: List[Tuple[int, int, int]] = []
+    def import_file_to_db(self, filepath):
         low = filepath.lower()
-        if low.endswith('.ase'):
-            palette = parse_ase_file(filepath)
-        elif low.endswith('.csv'):
-            palette = parse_csv_file(filepath)
-        elif low.endswith('.hex') or low.endswith('.txt'):
-            palette = parse_hex_list(filepath)
-        else:
-            palette = parse_map_file(filepath)
+        if low.endswith('.ase'): palette = parse_ase_file(filepath)
+        elif low.endswith('.csv'): palette = parse_csv_file(filepath)
+        elif low.endswith('.hex') or low.endswith('.txt'): palette = parse_hex_list(filepath)
+        else: palette = parse_map_file(filepath)
         if palette:
             name = os.path.basename(filepath)
             pid = self.db.insert_palette(palette, name=name)
             return pid, palette, name
         return None, [], None
 
-    def export_palette_data(self, palette: List[Tuple[int, int, int]],
-                            name: str, filepath: str, fmt: str = "map") -> bool:
-        if not palette:
-            return False
+    def export_palette_data(self, palette, name, filepath, fmt="map"):
+        if not palette: return False
         exporters = {
-            "css": export_as_css,
-            "json": export_as_json,
-            "gpl": lambda p, f: export_as_gpl(p, name, f),
-            "scss": export_as_scss,
-            "tailwind": export_as_tailwind,
-            "svg": export_as_svg,
-            "xml": export_as_android_xml,
-            "py": export_as_python,
+            "css": export_as_css, "json": export_as_json,
+            "gpl": lambda p,f: export_as_gpl(p,name,f),
+            "scss": export_as_scss, "tailwind": export_as_tailwind,
+            "svg": export_as_svg, "xml": export_as_android_xml, "py": export_as_python,
         }
-        if fmt in exporters:
-            return exporters[fmt](palette, filepath)
+        if fmt in exporters: return exporters[fmt](palette, filepath)
         return save_map_file(palette, filepath)
 
-    def create_palette(self, palette_data: List[Tuple[int, int, int]],
-                       name: str = "New Palette") -> Optional[int]:
-        return self.db.insert_palette(palette_data, name=name)
+    def create_palette(self, palette_data, name="New Palette"): return self.db.insert_palette(palette_data, name=name)
+    def update_palette(self, pid, palette_data, name): return self.db.update_palette(pid, palette_data, name)
+    def rename_palette(self, pid, name): self.db.rename_palette(pid, name)
+    def delete_palette(self, pid): self.db.delete_palette(pid)
 
-    def update_palette(self, pid: int,
-                       palette_data: List[Tuple[int, int, int]],
-                       name: str) -> bool:
-        return self.db.update_palette(pid, palette_data, name)
-
-    def rename_palette(self, pid: int, name: str):
-        self.db.rename_palette(pid, name)
-
-    def delete_palette(self, pid: int):
-        self.db.delete_palette(pid)
-
-    def generate_new_palettes(self, count: int = 10):
+    def generate_new_palettes(self, count=10):
         seed = int(time.time())
-        for i in range(count):
-            self.db.generate_and_insert(seed=seed + i)
+        for i in range(count): self.db.generate_and_insert(seed=seed+i)
 
-    def search_palettes(self, **kwargs):
-        return self.db.search(**kwargs)
-
-    def get_palette(self, pid: int):
-        return self.db.get_palette_by_id(pid)
-
-    def calculate_metadata(self, palette: List[Tuple[int, int, int]]):
-        return calculate_metadata(palette)
-
+    def search_palettes(self, **kwargs): return self.db.search(**kwargs)
+    def get_palette(self, pid): return self.db.get_palette_by_id(pid)
+    def calculate_metadata(self, palette): return calculate_metadata(palette)
 
 controller = PaletteController()
 
-
-# ══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════
 #  SETTINGS
-# ══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════
 
 class AppSettings:
     _path = os.path.join(os.path.expanduser("~"), ".duckpalette_settings.json")
-    _defaults: Dict[str, Any] = {
-        "window_geometry": None,
-        "splitter_sizes": [320, 780],
-        "recent_files": [],
-    }
+    _defaults = {"window_geometry": None, "splitter_sizes": [360, 840], "recent_files": []}
 
     @classmethod
-    def load(cls) -> Dict[str, Any]:
+    def load(cls):
         try:
-            with open(cls._path, "r") as f:
-                data = json.load(f)
-            merged = dict(cls._defaults)
-            merged.update(data)
-            return merged
-        except Exception:
-            return dict(cls._defaults)
+            with open(cls._path,"r") as f: data = json.load(f)
+            merged = dict(cls._defaults); merged.update(data); return merged
+        except: return dict(cls._defaults)
 
     @classmethod
-    def save(cls, settings: Dict[str, Any]):
+    def save(cls, settings):
         try:
-            with open(cls._path, "w") as f:
-                json.dump(settings, f, indent=2)
-        except Exception as e:
-            logger.warning("Failed to save settings: %s", e)
+            with open(cls._path,"w") as f: json.dump(settings,f,indent=2)
+        except Exception as e: logger.warning("Failed to save settings: %s",e)
 
     @classmethod
-    def add_recent_file(cls, path: str):
-        settings = cls.load()
-        recent = settings.get("recent_files", [])
-        if path in recent:
-            recent.remove(path)
-        recent.insert(0, path)
-        settings["recent_files"] = recent[:20]
+    def add_recent_file(cls, path):
+        settings = cls.load(); recent = settings.get("recent_files",[])
+        if path in recent: recent.remove(path)
+        recent.insert(0,path); settings["recent_files"] = recent[:20]
         cls.save(settings)
 
-
-# ══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════
 #  GUI CUSTOM WIDGETS
-# ══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════
 
-def create_palette_pixmap(palette: List[Tuple[int, int, int]],
-                          w: int = 80, h: int = 20) -> QPixmap:
-    px = QPixmap(w, h)
-    p = QPainter(px)
-    p.fillRect(0, 0, w, h, QColor("#181825"))
+def create_palette_pixmap(palette, w=80, h=20):
+    px = QPixmap(w,h); p = QPainter(px)
+    p.fillRect(0,0,w,h,QColor("#16161e"))
     if palette:
-        n = len(palette)
-        x = 0
-        for i, col in enumerate(palette):
-            nx = ((i + 1) * w) // n
-            p.fillRect(x, 0, nx - x, h, QColor(*col))
-            x = nx
-    p.end()
-    return px
+        n = len(palette); x = 0
+        for i,col in enumerate(palette):
+            nx = ((i+1)*w)//n; p.fillRect(x,0,nx-x,h,QColor(*col)); x = nx
+    p.end(); return px
 
 
 class ToastWidget(QFrame):
-    def __init__(self, message: str, duration: int = 2500, parent=None):
+    def __init__(self, message, duration=2500, parent=None):
         super().__init__(parent)
         self.setWindowFlags(Qt.WindowType.ToolTip)
         lay = QVBoxLayout(self)
         label = QLabel(message)
-        label.setStyleSheet("color:#cdd6f4; padding:8px 16px;")
+        label.setStyleSheet("color:#c0caf5; padding:8px 16px; font-weight:500;")
         lay.addWidget(label)
-        self.setStyleSheet(
-            "background:#313244; border:1px solid #89b4fa; border-radius:8px;")
+        self.setStyleSheet("background:#24283b; border:1px solid #7aa2f7; border-radius:8px;")
         self.adjustSize()
-        # BUG-FIX #11: use global coordinates for positioning
         if parent:
-            center = parent.rect().center()
-            global_pt = parent.mapToGlobal(center)
-            self.move(
-                global_pt.x() - self.width() // 2,
-                global_pt.y() + parent.height() // 2 - self.height() - 40,
-            )
+            center = parent.rect().center(); global_pt = parent.mapToGlobal(center)
+            self.move(global_pt.x()-self.width()//2, global_pt.y()+parent.height()//2-self.height()-40)
         self.show()
         QTimer.singleShot(duration, self.close)
 
@@ -1184,1495 +782,1405 @@ class ScreenColorPicker(QWidget):
     cancelled = Signal()
 
     def __init__(self):
-        super().__init__(
-            None,
-            Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.WindowStaysOnTopHint
-            | Qt.WindowType.Tool,
-        )
+        super().__init__(None, Qt.WindowType.FramelessWindowHint|Qt.WindowType.WindowStaysOnTopHint|Qt.WindowType.Tool)
         self.setWindowState(Qt.WindowState.WindowFullScreen)
         self.setCursor(Qt.CursorShape.CrossCursor)
-        self._timer = QTimer(self)
-        self._timer.setInterval(50)
+        self._timer = QTimer(self); self._timer.setInterval(50)
         self._timer.timeout.connect(self._update_color)
-        self._current_color = (0, 0, 0)
+        self._current_color = (0,0,0)
 
-    def start(self):
-        self.show()
-        self._timer.start()
+    def start(self): self.show(); self._timer.start()
 
-    # BUG-FIX #4: use screen-relative coordinates for grabWindow
     def _update_color(self):
-        pos = QCursor.pos()
-        screen = QApplication.screenAt(pos)
+        pos = QCursor.pos(); screen = QApplication.screenAt(pos)
         if screen:
             geo = screen.geometry()
-            img = screen.grabWindow(
-                0, pos.x() - geo.x(), pos.y() - geo.y(), 1, 1
-            ).toImage()
-            c = img.pixelColor(0, 0)
-            self._current_color = (c.red(), c.green(), c.blue())
+            img = screen.grabWindow(0,pos.x()-geo.x(),pos.y()-geo.y(),1,1).toImage()
+            c = img.pixelColor(0,0); self._current_color = (c.red(),c.green(),c.blue())
 
     def paintEvent(self, e):
-        p = QPainter(self)
-        p.fillRect(self.rect(), QColor(0, 0, 0, 1))
-        pos = QCursor.pos()
-        r, g, b = self._current_color
-        hx = rgb_to_hex(r, g, b)
-        p.setPen(Qt.GlobalColor.white)
-        p.drawRect(pos.x() - 20, pos.y() - 30, 120, 24)
-        p.fillRect(pos.x() - 19, pos.y() - 29, 118, 22,
-                   QColor(*self._current_color))
-        lum = 0.299 * r + 0.587 * g + 0.114 * b
-        p.setPen(QColor(0, 0, 0) if lum > 128 else QColor(255, 255, 255))
-        p.drawText(pos.x() - 15, pos.y() - 13, f"{hx} ({r},{g},{b})")
+        p = QPainter(self); p.fillRect(self.rect(),QColor(0,0,0,1))
+        pos = QCursor.pos(); r,g,b = self._current_color; hx = rgb_to_hex(r,g,b)
+        p.setPen(Qt.GlobalColor.white); p.drawRect(pos.x()-20,pos.y()-30,140,24)
+        p.fillRect(pos.x()-19,pos.y()-29,138,22,QColor(*self._current_color))
+        lum = 0.299*r+0.587*g+0.114*b
+        p.setPen(QColor(0,0,0) if lum>128 else QColor(255,255,255))
+        p.drawText(pos.x()-15,pos.y()-13,f"{hx} ({r},{g},{b})")
 
     def mousePressEvent(self, e):
-        self._timer.stop()
-        self.close()
-        if e.button() == Qt.MouseButton.LeftButton:
-            self.color_picked.emit(self._current_color)
-        else:
-            self.cancelled.emit()
+        self._timer.stop(); self.close()
+        if e.button()==Qt.MouseButton.LeftButton: self.color_picked.emit(self._current_color)
+        else: self.cancelled.emit()
 
     def keyPressEvent(self, e):
-        if e.key() == Qt.Key.Key_Escape:
-            self._timer.stop()
-            self.close()
-            self.cancelled.emit()
+        if e.key()==Qt.Key.Key_Escape: self._timer.stop(); self.close(); self.cancelled.emit()
 
+
+# ── Gradient Slider ───────────────────────────────────────
+
+class GradientSlider(QWidget):
+    """A slider with a gradient-filled track."""
+    valueChanged = Signal(int)
+
+    def __init__(self, orientation=Qt.Orientation.Horizontal, parent=None):
+        super().__init__(parent)
+        self._value = 0
+        self._min = 0
+        self._max = 255
+        self._gradient_stops = []  # list of (pos, QColor)
+        self.setFixedHeight(28)
+        self.setMinimumWidth(200)
+        self._dragging = False
+
+    def set_range(self, mn, mx):
+        self._min = mn; self._max = mx; self.update()
+
+    def set_value(self, v):
+        self._value = max(self._min, min(self._max, v)); self.update(); self.valueChanged.emit(self._value)
+
+    def value(self): return self._value
+
+    def set_gradient(self, stops):
+        """stops: list of (position_0_to_1, QColor)"""
+        self._gradient_stops = stops; self.update()
+
+    def _handle_x(self):
+        span = self.width() - 16
+        ratio = (self._value - self._min) / max(1, self._max - self._min)
+        return 8 + int(ratio * span)
+
+    def paintEvent(self, e):
+        p = QPainter(self); p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        track_rect = self.rect().adjusted(8, 6, -8, -6)
+        # Draw gradient track
+        grad = QLinearGradient(track_rect.left(), 0, track_rect.right(), 0)
+        for pos, color in self._gradient_stops:
+            grad.setColorAt(pos, color)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(grad)
+        p.drawRoundedRect(track_rect, 4, 4)
+        # Handle
+        hx = self._handle_x()
+        p.setBrush(QColor("#7aa2f7"))
+        p.setPen(QPen(QColor("#1a1b26"), 2))
+        p.drawEllipse(QPoint(hx, self.height()//2), 7, 7)
+        p.end()
+
+    def mousePressEvent(self, e):
+        if e.button()==Qt.MouseButton.LeftButton: self._dragging=True; self._set_from_x(e.position().x())
+
+    def mouseMoveEvent(self, e):
+        if self._dragging: self._set_from_x(e.position().x())
+
+    def mouseReleaseEvent(self, e): self._dragging = False
+
+    def _set_from_x(self, x):
+        span = self.width()-16; ratio = max(0, min(1, (x-8)/max(1,span)))
+        self.set_value(int(self._min + ratio*(self._max-self._min)))
+
+
+# ── Color Swatch Widget ───────────────────────────────────
+
+class ColorSwatchWidget(QFrame):
+    """A single interactive color swatch with hex label."""
+    clicked = Signal(int)
+    remove_requested = Signal(int)
+    color_changed = Signal(int, tuple)
+
+    def __init__(self, index, color=(128,128,128), parent=None):
+        super().__init__(parent)
+        self.index = index
+        self.color = color
+        self.selected = False
+        self._hover = False
+        self.setFixedSize(72, 90)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setMouseTracking(True)
+        self.setToolTip(rgb_to_hex(*self.color))
+
+    def set_color(self, color):
+        self.color = color; self.setToolTip(rgb_to_hex(*self.color)); self.update()
+
+    def set_selected(self, sel):
+        self.selected = sel; self.update()
+
+    def paintEvent(self, e):
+        p = QPainter(self); p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        r,g,b = self.color; hx = rgb_to_hex(r,g,b)
+        # Swatch rect
+        sw_rect = self.rect().adjusted(4, 4, -4, -24)
+        # Shadow
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(0,0,0,60))
+        p.drawRoundedRect(sw_rect.adjusted(2,2,2,2), 8, 8)
+        # Swatch fill
+        p.setBrush(QColor(r,g,b))
+        if self.selected:
+            p.setPen(QPen(QColor("#7aa2f7"), 2))
+        elif self._hover:
+            p.setPen(QPen(QColor("#545c7e"), 1))
+        else:
+            p.setPen(QPen(QColor("#3b4261"), 1))
+        p.drawRoundedRect(sw_rect, 8, 8)
+        # Hex label
+        p.setPen(QColor("#565f89"))
+        p.setFont(QFont("Segoe UI", 8))
+        label_rect = QRect(0, self.height()-20, self.width(), 20)
+        p.drawText(label_rect, Qt.AlignmentFlag.AlignCenter, hx)
+        p.end()
+
+    def enterEvent(self, e): self._hover=True; self.update()
+    def leaveEvent(self, e): self._hover=False; self.update()
+
+    def mousePressEvent(self, e):
+        if e.button()==Qt.MouseButton.LeftButton:
+            if e.modifiers() & Qt.KeyboardModifier.ControlModifier:
+                self.remove_requested.emit(self.index)
+            else:
+                self.clicked.emit(self.index)
+
+    def contextMenuEvent(self, e):
+        menu = QMenu(self)
+        copy_act = menu.addAction("Copy HEX")
+        copy_rgb_act = menu.addAction("Copy RGB")
+        menu.addSeparator()
+        remove_act = menu.addAction("Remove Color")
+        action = menu.exec(e.globalPos())
+        if action == copy_act:
+            QApplication.clipboard().setText(rgb_to_hex(*self.color))
+        elif action == copy_rgb_act:
+            QApplication.clipboard().setText(f"rgb({self.color[0]}, {self.color[1]}, {self.color[2]})")
+        elif action == remove_act:
+            self.remove_requested.emit(self.index)
+
+
+# ── Palette Strip Widget ──────────────────────────────────
+
+class PaletteStripWidget(QWidget):
+    """Displays the full palette as a horizontal strip with gradient between colors."""
+    selection_changed = Signal(int)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.palette = []
+        self.selected_index = -1
+        self.setMinimumHeight(60)
+        self.setMaximumHeight(80)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def set_palette(self, palette):
+        self.palette = list(palette); self.update()
+
+    def set_selected(self, idx):
+        self.selected_index = idx; self.update()
+
+    def paintEvent(self, e):
+        if not self.palette:
+            p = QPainter(self); p.fillRect(self.rect(), QColor("#16161e"))
+            p.setPen(QColor("#3b4261")); p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "No colors yet")
+            p.end(); return
+        p = QPainter(self); p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        n = len(self.palette); w = self.width(); h = self.height()
+        # Gradient background
+        grad = QLinearGradient(0,0,w,0)
+        for i, col in enumerate(self.palette):
+            grad.setColorAt(i/max(n-1,1), QColor(*col))
+        if n == 1: grad.setColorAt(1.0, QColor(*self.palette[0]))
+        p.fillRect(self.rect(), grad)
+        # Selection indicator
+        if 0 <= self.selected_index < n:
+            x_start = self.selected_index * w // n
+            x_end = (self.selected_index + 1) * w // n
+            p.setPen(QPen(QColor("#7aa2f7"), 3))
+            p.drawLine(x_start, 0, x_end, 0)
+            p.drawLine(x_start, h-1, x_end, h-1)
+        # Color dividers
+        p.setPen(QPen(QColor(0,0,0,40), 1))
+        for i in range(1, n):
+            x = i * w // n
+            p.drawLine(x, 0, x, h)
+        p.end()
+
+    def mousePressEvent(self, e):
+        if e.button()==Qt.MouseButton.LeftButton and self.palette:
+            n = len(self.palette); idx = e.position().x() * n // self.width()
+            idx = max(0, min(n-1, idx))
+            self.selected_index = idx; self.selection_changed.emit(idx); self.update()
+
+
+# ── Color Editor Panel ────────────────────────────────────
+
+class ColorEditorPanel(QWidget):
+    """Full-featured color editor with RGB/HSV sliders and hex input."""
+    color_changed = Signal(tuple)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._color = (128, 128, 128)
+        self._updating = False
+        self._init_ui()
+
+    def _init_ui(self):
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(12)
+
+        # ── Top: Large preview + hex ─────────────────────
+        top_row = QHBoxLayout()
+        top_row.setSpacing(12)
+
+        # Large color preview
+        self.preview = QLabel()
+        self.preview.setFixedSize(80, 80)
+        self.preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.preview.setStyleSheet("border-radius:12px; font-size:11px; font-weight:600;")
+        top_row.addWidget(self.preview)
+
+        # Color info column
+        info_col = QVBoxLayout()
+        info_col.setSpacing(6)
+
+        # Hex input
+        hex_row = QHBoxLayout()
+        hex_row.addWidget(QLabel("HEX:"))
+        self.hex_input = QLineEdit("#808080")
+        self.hex_input.setMaximumWidth(100)
+        self.hex_input.editingFinished.connect(self._on_hex_changed)
+        hex_row.addWidget(self.hex_input)
+        copy_btn = QToolButton()
+        copy_btn.setText("📋")
+        copy_btn.setToolTip("Copy HEX to clipboard")
+        copy_btn.setFixedSize(28, 28)
+        copy_btn.clicked.connect(lambda: QApplication.clipboard().setText(self.hex_input.text()))
+        hex_row.addWidget(copy_btn)
+        info_col.addLayout(hex_row)
+
+        # RGB / HSL labels
+        self.rgb_label = QLabel("RGB: 128, 128, 128")
+        self.rgb_label.setStyleSheet("color:#565f89; font-size:11px;")
+        info_col.addWidget(self.rgb_label)
+
+        self.hsl_label = QLabel("HSL: 0°, 0%, 50%")
+        self.hsl_label.setStyleSheet("color:#565f89; font-size:11px;")
+        info_col.addWidget(self.hsl_label)
+
+        self.lum_label = QLabel("Luminance: 0.22")
+        self.lum_label.setStyleSheet("color:#565f89; font-size:11px;")
+        info_col.addWidget(self.lum_label)
+
+        top_row.addLayout(info_col, 1)
+        main_layout.addLayout(top_row)
+
+        # ── Separator ────────────────────────────────────
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setStyleSheet("background:#3b4261; max-height:1px;")
+        main_layout.addWidget(sep)
+
+        # ── HSV Sliders ──────────────────────────────────
+        hsv_group = QGroupBox("HSV")
+        hsv_lay = QVBoxLayout(hsv_group)
+        hsv_lay.setSpacing(8)
+
+        # Hue
+        self.hue_slider = GradientSlider()
+        self.hue_slider.set_range(0, 360)
+        self._setup_hue_gradient()
+        self.hue_label = QLabel("0°")
+        self.hue_label.setFixedWidth(36)
+        self.hue_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        h_row = QHBoxLayout(); h_row.addWidget(QLabel("H")); h_row.addWidget(self.hue_slider, 1); h_row.addWidget(self.hue_label)
+        hsv_lay.addLayout(h_row)
+
+        # Saturation
+        self.sat_slider = GradientSlider()
+        self.sat_slider.set_range(0, 100)
+        self.sat_label = QLabel("0%")
+        self.sat_label.setFixedWidth(36)
+        self.sat_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        s_row = QHBoxLayout(); s_row.addWidget(QLabel("S")); s_row.addWidget(self.sat_slider, 1); s_row.addWidget(self.sat_label)
+        hsv_lay.addLayout(s_row)
+
+        # Value
+        self.val_slider = GradientSlider()
+        self.val_slider.set_range(0, 100)
+        self.val_label = QLabel("0%")
+        self.val_label.setFixedWidth(36)
+        self.val_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        v_row = QHBoxLayout(); v_row.addWidget(QLabel("V")); v_row.addWidget(self.val_slider, 1); v_row.addWidget(self.val_label)
+        hsv_lay.addLayout(v_row)
+
+        main_layout.addWidget(hsv_group)
+
+        # ── RGB Sliders ──────────────────────────────────
+        rgb_group = QGroupBox("RGB")
+        rgb_lay = QVBoxLayout(rgb_group)
+        rgb_lay.setSpacing(8)
+
+        self.r_slider = GradientSlider(); self.r_slider.set_range(0, 255)
+        self.g_slider = GradientSlider(); self.g_slider.set_range(0, 255)
+        self.b_slider = GradientSlider(); self.b_slider.set_range(0, 255)
+
+        self.r_label = QLabel("0"); self.r_label.setFixedWidth(30); self.r_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.g_label = QLabel("0"); self.g_label.setFixedWidth(30); self.g_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.b_label = QLabel("0"); self.b_label.setFixedWidth(30); self.b_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+
+        r_row = QHBoxLayout(); r_row.addWidget(QLabel("R")); r_row.addWidget(self.r_slider,1); r_row.addWidget(self.r_label)
+        g_row = QHBoxLayout(); g_row.addWidget(QLabel("G")); g_row.addWidget(self.g_slider,1); g_row.addWidget(self.g_label)
+        b_row = QHBoxLayout(); b_row.addWidget(QLabel("B")); b_row.addWidget(self.b_slider,1); b_row.addWidget(self.b_label)
+        rgb_lay.addLayout(r_row); rgb_lay.addLayout(g_row); rgb_lay.addLayout(b_row)
+
+        main_layout.addWidget(rgb_group)
+
+        # ── Connections ──────────────────────────────────
+        self.hue_slider.valueChanged.connect(self._on_hsv_changed)
+        self.sat_slider.valueChanged.connect(self._on_hsv_changed)
+        self.val_slider.valueChanged.connect(self._on_hsv_changed)
+        self.r_slider.valueChanged.connect(self._on_rgb_changed)
+        self.g_slider.valueChanged.connect(self._on_rgb_changed)
+        self.b_slider.valueChanged.connect(self._on_rgb_changed)
+
+        main_layout.addStretch()
+        self.set_color(self._color)
+
+    def _setup_hue_gradient(self):
+        stops = []
+        for i in range(7):
+            h = i * 60
+            r, g, b = hsv_to_rgb(h, 1.0, 1.0)
+            stops.append((i / 6, QColor(r, g, b)))
+        self.hue_slider.set_gradient(stops)
+
+    def _update_slider_gradients(self):
+        h, s, v = rgb_to_hsv(*self._color)
+        r, g, b = self._color
+        # Saturation gradient: gray → full hue
+        gray = hsv_to_rgb(h, 0, v)
+        full = hsv_to_rgb(h, 1, v)
+        self.sat_slider.set_gradient([(0, QColor(*gray)), (1, QColor(*full))])
+        # Value gradient: black → full
+        self.val_slider.set_gradient([(0, QColor(0,0,0)), (1, QColor(*hsv_to_rgb(h, s, 1)))])
+        # RGB gradients
+        self.r_slider.set_gradient([(0, QColor(0,g,b)), (1, QColor(255,g,b))])
+        self.g_slider.set_gradient([(0, QColor(r,0,b)), (1, QColor(r,255,b))])
+        self.b_slider.set_gradient([(0, QColor(r,g,0)), (1, QColor(r,g,255))])
+
+    def set_color(self, color):
+        self._updating = True
+        self._color = color
+        r, g, b = color
+        h, s, v = rgb_to_hsv(r, g, b)
+        hx = rgb_to_hex(r, g, b)
+        hsl = rgb_to_hsl(r, g, b)
+        lum = 0.299*r + 0.587*g + 0.114*b
+        tc = "#1a1b26" if lum > 128 else "#c0caf5"
+
+        self.preview.setStyleSheet(
+            f"background:{hx}; border-radius:12px; color:{tc}; font-size:11px; font-weight:600;")
+        self.preview.setText(hx)
+        self.hex_input.setText(hx)
+        self.rgb_label.setText(f"RGB: {r}, {g}, {b}")
+        self.hsl_label.setText(f"HSL: {hsl[0]:.0f}°, {hsl[1]:.0f}%, {hsl[2]:.0f}%")
+        self.lum_label.setText(f"Luminance: {lum/255:.2f}")
+
+        self.hue_slider.set_value(int(h))
+        self.sat_slider.set_value(int(s * 100))
+        self.val_slider.set_value(int(v * 100))
+        self.hue_label.setText(f"{int(h)}°")
+        self.sat_label.setText(f"{int(s*100)}%")
+        self.val_label.setText(f"{int(v*100)}%")
+
+        self.r_slider.set_value(r)
+        self.g_slider.set_value(g)
+        self.b_slider.set_value(b)
+        self.r_label.setText(str(r))
+        self.g_label.setText(str(g))
+        self.b_label.setText(str(b))
+
+        self._update_slider_gradients()
+        self._updating = False
+
+    def _on_hsv_changed(self, _=None):
+        if self._updating: return
+        h = self.hue_slider.value()
+        s = self.sat_slider.value() / 100
+        v = self.val_slider.value() / 100
+        self._color = hsv_to_rgb(h, s, v)
+        self.color_changed.emit(self._color)
+        self.set_color(self._color)
+
+    def _on_rgb_changed(self, _=None):
+        if self._updating: return
+        r = self.r_slider.value()
+        g = self.g_slider.value()
+        b = self.b_slider.value()
+        self._color = (r, g, b)
+        self.color_changed.emit(self._color)
+        self.set_color(self._color)
+
+    def _on_hex_changed(self):
+        try:
+            c = hex_to_rgb(self.hex_input.text())
+            self._color = c
+            self.color_changed.emit(c)
+            self.set_color(c)
+        except ValueError:
+            self.hex_input.setText(rgb_to_hex(*self._color))
+
+
+# ── Contrast Checker Widget ───────────────────────────────
 
 class ContrastCheckerWidget(QGroupBox):
     def __init__(self, parent=None):
-        super().__init__("Contrast Checker", parent)
+        super().__init__("♿ Contrast Checker", parent)
         lay = QVBoxLayout(self)
+        lay.setSpacing(10)
 
+        # FG row
         fg_row = QHBoxLayout()
         self.fg_swatch = QLabel()
-        self.fg_swatch.setFixedSize(40, 28)
+        self.fg_swatch.setFixedSize(36, 24)
         self.fg_swatch.setStyleSheet("background:#ffffff; border-radius:4px;")
         self.fg_hex = QLineEdit("#FFFFFF")
-        self.fg_hex.setMaximumWidth(90)
+        self.fg_hex.setMaximumWidth(85)
         self.fg_hex.editingFinished.connect(self._recalc)
         fg_btn = QPushButton("Pick")
+        fg_btn.setFixedWidth(44)
         fg_btn.clicked.connect(lambda: self._pick("fg"))
-        fg_row.addWidget(QLabel("FG:"))
-        fg_row.addWidget(self.fg_swatch)
-        fg_row.addWidget(self.fg_hex)
-        fg_row.addWidget(fg_btn)
+        fg_row.addWidget(QLabel("FG:")); fg_row.addWidget(self.fg_swatch)
+        fg_row.addWidget(self.fg_hex); fg_row.addWidget(fg_btn)
         lay.addLayout(fg_row)
 
+        # BG row
         bg_row = QHBoxLayout()
         self.bg_swatch = QLabel()
-        self.bg_swatch.setFixedSize(40, 28)
+        self.bg_swatch.setFixedSize(36, 24)
         self.bg_swatch.setStyleSheet("background:#000000; border-radius:4px;")
         self.bg_hex = QLineEdit("#000000")
-        self.bg_hex.setMaximumWidth(90)
+        self.bg_hex.setMaximumWidth(85)
         self.bg_hex.editingFinished.connect(self._recalc)
         bg_btn = QPushButton("Pick")
+        bg_btn.setFixedWidth(44)
         bg_btn.clicked.connect(lambda: self._pick("bg"))
-        bg_row.addWidget(QLabel("BG:"))
-        bg_row.addWidget(self.bg_swatch)
-        bg_row.addWidget(self.bg_hex)
-        bg_row.addWidget(bg_btn)
+        bg_row.addWidget(QLabel("BG:")); bg_row.addWidget(self.bg_swatch)
+        bg_row.addWidget(self.bg_hex); bg_row.addWidget(bg_btn)
         lay.addLayout(bg_row)
 
+        # Swap button
+        swap_row = QHBoxLayout()
+        swap_btn = QPushButton("⇄ Swap")
+        swap_btn.setFixedWidth(70)
+        swap_btn.clicked.connect(self._swap)
+        swap_row.addStretch()
+        swap_row.addWidget(swap_btn)
+        swap_row.addStretch()
+        lay.addLayout(swap_row)
+
+        # Sample text
         self.sample = QLabel("Sample Text  Aa Bb Cc  123")
         self.sample.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.sample.setMinimumHeight(48)
-        self.sample.setFont(QFont("Segoe UI", 16))
+        self.sample.setMinimumHeight(44)
+        self.sample.setFont(QFont("Segoe UI", 14, QFont.Weight.Bold))
         lay.addWidget(self.sample)
 
+        # Result
         self.result_label = QLabel()
         self.result_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.result_label.setStyleSheet("font-size:18px; font-weight:bold;")
+        self.result_label.setStyleSheet("font-weight:700; font-size:15px;")
         lay.addWidget(self.result_label)
 
-        self.detail_label = QLabel()
-        self.detail_label.setStyleSheet("color:#a6adc8; font-size:11px;")
-        lay.addWidget(self.detail_label)
-
-        swap_btn = QPushButton("⇄ Swap FG/BG")
-        swap_btn.clicked.connect(self._swap)
-        lay.addWidget(swap_btn)
-
-        self._fg = (255, 255, 255)
-        self._bg = (0, 0, 0)
         self._recalc()
 
-    def _pick(self, which: str):
-        cur = QColor(*(self._fg if which == "fg" else self._bg))
-        c = QColorDialog.getColor(cur, self)
-        if c.isValid():
-            rgb = (c.red(), c.green(), c.blue())
-            if which == "fg":
-                self._fg = rgb
+    def _pick(self, target):
+        dlg = QColorDialog(self)
+        if dlg.exec() == QColorDialog.DialogCode.Accepted:
+            c = dlg.selectedColor()
+            hx = c.name().upper()
+            if target == "fg":
+                self.fg_hex.setText(hx); self.fg_swatch.setStyleSheet(f"background:{hx}; border-radius:4px;")
             else:
-                self._bg = rgb
-            self._update_swatches()
+                self.bg_hex.setText(hx); self.bg_swatch.setStyleSheet(f"background:{hx}; border-radius:4px;")
             self._recalc()
 
     def _swap(self):
-        self._fg, self._bg = self._bg, self._fg
-        self._update_swatches()
+        fg = self.fg_hex.text(); bg = self.bg_hex.text()
+        self.fg_hex.setText(bg); self.bg_hex.setText(fg)
+        self.fg_swatch.setStyleSheet(f"background:{bg}; border-radius:4px;")
+        self.bg_swatch.setStyleSheet(f"background:{fg}; border-radius:4px;")
         self._recalc()
 
-    def _update_swatches(self):
-        self.fg_hex.setText(rgb_to_hex(*self._fg))
-        self.bg_hex.setText(rgb_to_hex(*self._bg))
-        self.fg_swatch.setStyleSheet(
-            f"background:{rgb_to_hex(*self._fg)}; border-radius:4px;")
-        self.bg_swatch.setStyleSheet(
-            f"background:{rgb_to_hex(*self._bg)}; border-radius:4px;")
-
-    # BUG-FIX #8: visual feedback on invalid hex instead of silent return
     def _recalc(self):
-        ok_fg = ok_bg = True
         try:
-            self._fg = hex_to_rgb(self.fg_hex.text())
-            self.fg_hex.setStyleSheet("")
+            fg = hex_to_rgb(self.fg_hex.text()); bg = hex_to_rgb(self.bg_hex.text())
         except ValueError:
-            self.fg_hex.setStyleSheet("border:1px solid #f38ba8;")
-            ok_fg = False
-        try:
-            self._bg = hex_to_rgb(self.bg_hex.text())
-            self.bg_hex.setStyleSheet("")
-        except ValueError:
-            self.bg_hex.setStyleSheet("border:1px solid #f38ba8;")
-            ok_bg = False
-        if not ok_fg or not ok_bg:
             return
-
-        fg_hex = rgb_to_hex(*self._fg)
-        bg_hex = rgb_to_hex(*self._bg)
+        fg_lum = _relative_luminance_py(*fg) if not NUMBA_AVAILABLE else float(_relative_luminance_numba(*fg))
+        bg_lum = _relative_luminance_py(*bg) if not NUMBA_AVAILABLE else float(_relative_luminance_numba(*bg))
+        l1, l2 = max(fg_lum,bg_lum), min(fg_lum,bg_lum)
+        ratio = (l1+0.05)/(l2+0.05)
         self.sample.setStyleSheet(
-            f"color:{fg_hex}; background:{bg_hex}; padding:8px; border-radius:4px;")
-
-        if NUMBA_AVAILABLE:
-            l1 = float(_relative_luminance_numba(*self._fg))
-            l2 = float(_relative_luminance_numba(*self._bg))
-        else:
-            l1 = _relative_luminance_py(*self._fg)
-            l2 = _relative_luminance_py(*self._bg)
-
-        ratio = (max(l1, l2) + 0.05) / (min(l1, l2) + 0.05)
-        if ratio >= 7:
-            rating, color = "AAA ✓", "#a6e3a1"
-        elif ratio >= 4.5:
-            rating, color = "AA ✓", "#f9e2af"
-        elif ratio >= 3:
-            rating, color = "AA Large ⚠", "#fab387"
-        else:
-            rating, color = "Fail ✗", "#f38ba8"
-        self.result_label.setText(f"{ratio:.2f}:1  {rating}")
-        self.result_label.setStyleSheet(
-            f"font-size:18px; font-weight:bold; color:{color};")
-        self.detail_label.setText(
-            f"Normal text: {'Pass' if ratio >= 4.5 else 'Fail'} AA / "
-            f"{'Pass' if ratio >= 7 else 'Fail'} AAA\n"
-            f"Large text:  {'Pass' if ratio >= 3 else 'Fail'} AA / "
-            f"{'Pass' if ratio >= 4.5 else 'Fail'} AAA"
-        )
-
-    def set_colors(self, fg: Tuple[int, int, int], bg: Tuple[int, int, int]):
-        self._fg, self._bg = fg, bg
-        self._update_swatches()
-        self._recalc()
+            f"background:{self.bg_hex.text()}; color:{self.fg_hex.text()}; "
+            f"border-radius:6px; padding:8px;")
+        aa = ratio >= 4.5; aaa = ratio >= 7.0
+        aa_large = ratio >= 3.0; aaa_large = ratio >= 4.5
+        color = "#9ece6a" if aaa else "#e0af68" if aa else "#f7768e"
+        self.result_label.setText(f"Contrast: {ratio:.2f}:1")
+        badges = []
+        badges.append(f"AA {'✓' if aa else '✗'}")
+        badges.append(f"AAA {'✓' if aaa else '✗'}")
+        badges.append(f"AA-L {'✓' if aa_large else '✗'}")
+        badges.append(f"AAA-L {'✓' if aaa_large else '✗'}")
+        self.result_label.setStyleSheet(f"color:{color}; font-weight:700; font-size:14px;")
+        self.result_label.setText(f"{ratio:.2f}:1  {'  '.join(badges)}")
 
 
-class ColorWheelWidget(QWidget):
-    color_selected = Signal(float)
+# ── Color Blindness Preview ───────────────────────────────
+
+class ColorBlindnessPreview(QGroupBox):
+    def __init__(self, parent=None):
+        super().__init__("👁 Color Blindness Simulation", parent)
+        lay = QVBoxLayout(self)
+        lay.setSpacing(8)
+        self.previews = {}
+        for cb_type, label in [("proto","Protanopia"),("deuto","Deuteranopia"),("trita","Tritanopia")]:
+            row = QHBoxLayout()
+            lbl = QLabel(label)
+            lbl.setFixedWidth(110)
+            lbl.setStyleSheet("color:#565f89; font-size:11px;")
+            strip = QLabel()
+            strip.setFixedHeight(24)
+            strip.setStyleSheet("border-radius:4px;")
+            self.previews[cb_type] = strip
+            row.addWidget(lbl); row.addWidget(strip, 1)
+            lay.addLayout(row)
+
+    def set_palette(self, palette):
+        for cb_type, strip in self.previews.items():
+            simulated = simulate_colorblind(palette, cb_type)
+            px = create_palette_pixmap(simulated, w=300, h=24)
+            strip.setPixmap(px)
+
+
+# ── Variation Preview ─────────────────────────────────────
+
+class VariationPreview(QGroupBox):
+    variation_applied = Signal(str, float)
+
+    def __init__(self, parent=None):
+        super().__init__("✨ Variations", parent)
+        lay = QGridLayout(self)
+        lay.setSpacing(6)
+        self.var_strips = {}
+        variations = [
+            ("lighter", "☀ Lighter"), ("darker", "🌙 Darker"),
+            ("muted", "🔇 Muted"), ("vivid", "📢 Vivid"),
+            ("pastel", "🍭 Pastel"), ("warm", "🔥 Warm"),
+            ("cool", "❄ Cool"),
+        ]
+        for i, (key, label) in enumerate(variations):
+            row, col = i // 2, (i % 2) * 2
+            lbl = QLabel(label)
+            lbl.setFixedWidth(85)
+            lbl.setStyleSheet("color:#565f89; font-size:11px;")
+            strip = QLabel()
+            strip.setFixedHeight(20)
+            strip.setStyleSheet("border-radius:3px;")
+            strip.setCursor(Qt.CursorShape.PointingHandCursor)
+            strip.mousePressEvent = lambda e, k=key: self.variation_applied.emit(k, 0.3)
+            self.var_strips[key] = strip
+            lay.addWidget(lbl, row, col); lay.addWidget(strip, row, col+1)
+
+    def set_palette(self, palette):
+        for key, strip in self.var_strips.items():
+            varied = generate_variations(palette, key, 0.3)
+            px = create_palette_pixmap(varied, w=160, h=20)
+            strip.setPixmap(px)
+
+
+# ═══════════════════════════════════════════════════════════
+#  MAIN PALETTE EDITOR TAB (IMPROVED)
+# ═══════════════════════════════════════════════════════════
+
+class PaletteEditorTab(QWidget):
+    palette_saved = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.palette: List[Tuple[int, int, int]] = []
-        self.setMinimumSize(180, 180)
-        self.setMaximumSize(220, 220)
-        self.setCursor(Qt.CursorShape.CrossCursor)
+        self._palette = [(94,129,172),(166,227,161),(249,226,175),(247,118,142),(187,154,247)]
+        self._selected_idx = 0
+        self._pid = None  # palette id in DB
+        self._name = "New Palette"
+        self._modified = False
+        self._init_ui()
 
-    def set_palette(self, pal: List[Tuple[int, int, int]]):
-        self.palette = pal
-        self.update()
+    def _init_ui(self):
+        outer = QHBoxLayout(self)
+        outer.setSpacing(0)
+        outer.setContentsMargins(0, 0, 0, 0)
 
-    def paintEvent(self, e):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        cx, cy = self.width() // 2, self.height() // 2
-        radius = min(cx, cy) - 12
-        for angle in range(360):
-            r, g, b = hsv_to_rgb(angle, 0.8, 0.8)
-            pen = QPen(QColor(r, g, b), 8)
-            p.setPen(pen)
-            rad = math.radians(angle - 90)
-            x1 = cx + int((radius - 4) * math.cos(rad))
-            y1 = cy + int((radius - 4) * math.sin(rad))
-            x2 = cx + int((radius + 4) * math.cos(rad))
-            y2 = cy + int((radius + 4) * math.sin(rad))
-            p.drawLine(x1, y1, x2, y2)
-        for i, (r, g, b) in enumerate(self.palette):
-            h, s, v = rgb_to_hsv(r, g, b)
-            rad = math.radians(h - 90)
-            dist = radius * (0.3 + 0.6 * (1.0 - s))
-            mx = cx + int(dist * math.cos(rad))
-            my = cy + int(dist * math.sin(rad))
-            p.setPen(QPen(QColor(255, 255, 255), 2))
-            p.setBrush(QBrush(QColor(r, g, b)))
-            p.drawEllipse(mx - 7, my - 7, 14, 14)
-            p.setPen(QColor("#cdd6f4"))
-            font = p.font()
-            font.setPixelSize(9)
-            p.setFont(font)
-            p.drawText(mx + 10, my + 4, f"{i + 1}")
-        p.end()
+        # ── Left: Scroll area with swatches + editor ────
+        left_widget = QWidget()
+        left_layout = QVBoxLayout(left_widget)
+        left_layout.setContentsMargins(16, 16, 16, 16)
+        left_layout.setSpacing(12)
 
-    # BUG-FIX #20: use float-precision position
-    def mousePressEvent(self, e):
-        cx, cy = self.width() / 2.0, self.height() / 2.0
-        dx = e.position().x() - cx
-        dy = e.position().y() - cy
-        angle = (math.degrees(math.atan2(dy, dx)) + 90) % 360
-        self.color_selected.emit(angle)
+        # Palette name
+        name_row = QHBoxLayout()
+        name_label = QLabel("Palette:")
+        name_label.setStyleSheet("color:#565f89; font-weight:600;")
+        self.name_edit = QLineEdit(self._name)
+        self.name_edit.setStyleSheet("font-weight:600; font-size:14px;")
+        self.name_edit.textChanged.connect(lambda _: self._mark_modified())
+        name_row.addWidget(name_label); name_row.addWidget(self.name_edit, 1)
+        left_layout.addLayout(name_row)
 
+        # ── Palette strip (gradient preview) ────────────
+        strip_label = QLabel("Preview")
+        strip_label.setStyleSheet("color:#7aa2f7; font-weight:600; font-size:12px; text-transform:uppercase; letter-spacing:1px;")
+        left_layout.addWidget(strip_label)
 
-class PalettePreviewWidget(QFrame):
-    color_clicked = Signal(int)
+        self.strip_widget = PaletteStripWidget()
+        self.strip_widget.selection_changed.connect(self._on_strip_select)
+        left_layout.addWidget(self.strip_widget)
 
-    def __init__(self):
-        super().__init__()
-        self.palette: List[Tuple[int, int, int]] = []
-        self.hover_idx = -1
-        self.selected_idx = -1
-        self.setMinimumHeight(56)
-        self.setMouseTracking(True)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setFrameShape(QFrame.Shape.StyledPanel)
+        # ── Swatches row ────────────────────────────────
+        swatch_label = QLabel("Colors")
+        swatch_label.setStyleSheet("color:#7aa2f7; font-weight:600; font-size:12px; text-transform:uppercase; letter-spacing:1px;")
+        left_layout.addWidget(swatch_label)
 
-    def set_palette(self, pal: List[Tuple[int, int, int]]):
-        self.palette = pal
-        self.update()
+        self.swatch_container = QWidget()
+        self.swatch_layout = QHBoxLayout(self.swatch_container)
+        self.swatch_layout.setContentsMargins(0, 0, 0, 0)
+        self.swatch_layout.setSpacing(4)
+        self.swatch_layout.addStretch()
+        left_layout.addWidget(self.swatch_container)
 
-    def set_selected(self, idx: int):
-        self.selected_idx = idx
-        self.update()
+        # Swatch action buttons
+        swatch_btns = QHBoxLayout()
+        self.add_btn = QPushButton("+ Add Color")
+        self.add_btn.setProperty("class", "accent")
+        self.add_btn.clicked.connect(self._add_color)
+        self.pick_screen_btn = QPushButton("📺 Pick Screen")
+        self.pick_screen_btn.clicked.connect(self._pick_screen_color)
+        self.pick_btn = QPushButton("🎨 Pick Color")
+        self.pick_btn.clicked.connect(self._pick_color)
+        self.remove_btn = QPushButton("✕ Remove")
+        self.remove_btn.setProperty("class", "danger")
+        self.remove_btn.clicked.connect(self._remove_color)
+        swatch_btns.addWidget(self.add_btn)
+        swatch_btns.addWidget(self.pick_screen_btn)
+        swatch_btns.addWidget(self.pick_btn)
+        swatch_btns.addWidget(self.remove_btn)
+        left_layout.addLayout(swatch_btns)
 
-    def _idx_at(self, x: int) -> int:
-        if not self.palette:
-            return -1
-        n = len(self.palette)
-        w = self.width()
-        for i in range(n):
-            s = (i * w) // n
-            e = ((i + 1) * w) // n
-            if s <= x < e:
-                return i
-        return -1
+        # ── Separator ────────────────────────────────────
+        sep = QFrame(); sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setStyleSheet("background:#24283b; max-height:1px;")
+        left_layout.addWidget(sep)
 
-    def mouseMoveEvent(self, e):
-        idx = self._idx_at(int(e.position().x()))
-        if idx != self.hover_idx:
-            self.hover_idx = idx
-            self.update()
-        if 0 <= idx < len(self.palette):
-            r, g, b = self.palette[idx]
-            QToolTip.showText(
-                e.globalPosition().toPoint(),
-                f"{rgb_to_hex(r, g, b)}\nRGB({r}, {g}, {b})",
-            )
-        else:
-            QToolTip.hideText()
+        # ── Color Editor Panel ──────────────────────────
+        editor_label = QLabel("Edit Selected Color")
+        editor_label.setStyleSheet("color:#7aa2f7; font-weight:600; font-size:12px; text-transform:uppercase; letter-spacing:1px;")
+        left_layout.addWidget(editor_label)
 
-    def mousePressEvent(self, e):
-        idx = self._idx_at(int(e.position().x()))
-        if idx >= 0:
-            self.color_clicked.emit(idx)
+        self.color_editor = ColorEditorPanel()
+        self.color_editor.color_changed.connect(self._on_color_edited)
+        left_layout.addWidget(self.color_editor)
 
-    def leaveEvent(self, e):
-        self.hover_idx = -1
-        self.update()
-        QToolTip.hideText()
+        left_layout.addStretch()
 
-    def paintEvent(self, e):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        r = self.rect()
-        p.fillRect(r, QColor("#181825"))
-        if not self.palette:
-            p.setPen(QColor("#6c7086"))
-            p.drawText(r, Qt.AlignmentFlag.AlignCenter, "No colors")
+        left_scroll = QScrollArea()
+        left_scroll.setWidget(left_widget)
+        left_scroll.setWidgetResizable(True)
+        left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
+        # ── Right: Sidebar with tools ────────────────────
+        right_widget = QWidget()
+        right_widget.setMaximumWidth(320)
+        right_widget.setMinimumWidth(280)
+        right_layout = QVBoxLayout(right_widget)
+        right_layout.setContentsMargins(12, 16, 12, 16)
+        right_layout.setSpacing(10)
+
+        # Palette actions
+        actions_label = QLabel("Actions")
+        actions_label.setStyleSheet("color:#7aa2f7; font-weight:600; font-size:12px; text-transform:uppercase; letter-spacing:1px;")
+        right_layout.addWidget(actions_label)
+
+        act_grid = QGridLayout()
+        act_grid.setSpacing(6)
+        self.sort_hue_btn = QPushButton("Sort by Hue")
+        self.sort_bright_btn = QPushButton("Sort by Brightness")
+        self.sort_sat_btn = QPushButton("Sort by Saturation")
+        self.reverse_btn = QPushButton("Reverse")
+        self.harmony_btn = QPushButton("🎵 Harmony")
+        self.import_img_btn = QPushButton("🖼 From Image")
+
+        self.sort_hue_btn.clicked.connect(lambda: self._sort_palette("hue"))
+        self.sort_bright_btn.clicked.connect(lambda: self._sort_palette("brightness"))
+        self.sort_sat_btn.clicked.connect(lambda: self._sort_palette("saturation"))
+        self.reverse_btn.clicked.connect(self._reverse_palette)
+        self.harmony_btn.clicked.connect(self._show_harmony_dialog)
+        self.import_img_btn.clicked.connect(self._import_from_image)
+
+        act_grid.addWidget(self.sort_hue_btn, 0, 0)
+        act_grid.addWidget(self.sort_bright_btn, 0, 1)
+        act_grid.addWidget(self.sort_sat_btn, 1, 0)
+        act_grid.addWidget(self.reverse_btn, 1, 1)
+        act_grid.addWidget(self.harmony_btn, 2, 0)
+        act_grid.addWidget(self.import_img_btn, 2, 1)
+        right_layout.addLayout(act_grid)
+
+        # Save / Export
+        save_export_row = QHBoxLayout()
+        self.save_btn = QPushButton("💾 Save")
+        self.save_btn.setProperty("class", "accent")
+        self.save_btn.clicked.connect(self._save_palette)
+        self.export_btn = QPushButton("📤 Export")
+        self.export_btn.clicked.connect(self._export_palette)
+        save_export_row.addWidget(self.save_btn)
+        save_export_row.addWidget(self.export_btn)
+        right_layout.addLayout(save_export_row)
+
+        # ── Variation Preview ───────────────────────────
+        self.variation_preview = VariationPreview()
+        self.variation_preview.variation_applied.connect(self._apply_variation)
+        right_layout.addWidget(self.variation_preview)
+
+        # ── Contrast Checker ────────────────────────────
+        self.contrast_checker = ContrastCheckerWidget()
+        right_layout.addWidget(self.contrast_checker)
+
+        # ── Color Blindness Preview ─────────────────────
+        self.cb_preview = ColorBlindnessPreview()
+        right_layout.addWidget(self.cb_preview)
+
+        # ── Palette Metadata ────────────────────────────
+        self.meta_group = QGroupBox("📊 Metadata")
+        meta_lay = QFormLayout(self.meta_group)
+        meta_lay.setSpacing(4)
+        self.meta_bright = QLabel("—")
+        self.meta_contrast = QLabel("—")
+        self.meta_dominant = QLabel("—")
+        self.meta_wcag = QLabel("—")
+        self.meta_dupes = QLabel("—")
+        meta_lay.addRow("Brightness:", self.meta_bright)
+        meta_lay.addRow("Contrast:", self.meta_contrast)
+        meta_lay.addRow("Dominant:", self.meta_dominant)
+        meta_lay.addRow("WCAG Ratio:", self.meta_wcag)
+        meta_lay.addRow("Duplicates:", self.meta_dupes)
+        right_layout.addWidget(self.meta_group)
+
+        right_layout.addStretch()
+
+        right_scroll = QScrollArea()
+        right_scroll.setWidget(right_widget)
+        right_scroll.setWidgetResizable(True)
+        right_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
+        # ── Splitter ────────────────────────────────────
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.addWidget(left_scroll)
+        splitter.addWidget(right_scroll)
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 0)
+        splitter.setSizes([600, 320])
+
+        outer.addWidget(splitter)
+
+        # ── Screen picker ───────────────────────────────
+        self._screen_picker = None
+
+        # Initial render
+        self._rebuild_swatches()
+        self._select_index(0)
+        self._update_metadata()
+
+    # ── Swatch Management ────────────────────────────────
+
+    def _rebuild_swatches(self):
+        # Clear existing
+        while self.swatch_layout.count() > 1:
+            item = self.swatch_layout.takeAt(0)
+            if item.widget(): item.widget().deleteLater()
+        # Add swatches
+        for i, col in enumerate(self._palette):
+            sw = ColorSwatchWidget(i, col)
+            sw.clicked.connect(self._on_swatch_click)
+            sw.remove_requested.connect(self._remove_at_index)
+            self.swatch_layout.insertWidget(i, sw)
+        self.strip_widget.set_palette(self._palette)
+        self.variation_preview.set_palette(self._palette)
+        self.cb_preview.set_palette(self._palette)
+
+    def _select_index(self, idx):
+        if not self._palette: return
+        self._selected_idx = max(0, min(idx, len(self._palette)-1))
+        # Update swatch selection visuals
+        for i in range(self.swatch_layout.count()):
+            w = self.swatch_layout.itemAt(i).widget()
+            if isinstance(w, ColorSwatchWidget):
+                w.set_selected(w.index == self._selected_idx)
+        self.strip_widget.set_selected(self._selected_idx)
+        self.color_editor.set_color(self._palette[self._selected_idx])
+
+    def _on_swatch_click(self, idx):
+        self._select_index(idx)
+
+    def _on_strip_select(self, idx):
+        self._select_index(idx)
+
+    def _on_color_edited(self, color):
+        if 0 <= self._selected_idx < len(self._palette):
+            self._palette[self._selected_idx] = color
+            self._mark_modified()
+            self._refresh_current_swatch()
+            self.strip_widget.set_palette(self._palette)
+            self.variation_preview.set_palette(self._palette)
+            self.cb_preview.set_palette(self._palette)
+            self._update_metadata()
+
+    def _refresh_current_swatch(self):
+        if 0 <= self._selected_idx < len(self._palette):
+            w = self.swatch_layout.itemAt(self._selected_idx).widget()
+            if isinstance(w, ColorSwatchWidget):
+                w.set_color(self._palette[self._selected_idx])
+
+    def _add_color(self):
+        color = QColorDialog.getColor(QColor(*self._palette[-1] if self._palette else (128,128,128)), self)
+        if color.isValid():
+            self._palette.append((color.red(), color.green(), color.blue()))
+            self._mark_modified()
+            self._rebuild_swatches()
+            self._select_index(len(self._palette)-1)
+            self._update_metadata()
+
+    def _pick_color(self):
+        if 0 <= self._selected_idx < len(self._palette):
+            color = QColorDialog.getColor(QColor(*self._palette[self._selected_idx]), self)
+            if color.isValid():
+                self._palette[self._selected_idx] = (color.red(), color.green(), color.blue())
+                self._mark_modified()
+                self.color_editor.set_color(self._palette[self._selected_idx])
+                self._refresh_current_swatch()
+                self.strip_widget.set_palette(self._palette)
+                self.variation_preview.set_palette(self._palette)
+                self.cb_preview.set_palette(self._palette)
+                self._update_metadata()
+
+    def _pick_screen_color(self):
+        self._screen_picker = ScreenColorPicker()
+        self._screen_picker.color_picked.connect(self._on_screen_color_picked)
+        self._screen_picker.start()
+
+    def _on_screen_color_picked(self, color):
+        if 0 <= self._selected_idx < len(self._palette):
+            self._palette[self._selected_idx] = color
+            self._mark_modified()
+            self.color_editor.set_color(color)
+            self._refresh_current_swatch()
+            self.strip_widget.set_palette(self._palette)
+            self.variation_preview.set_palette(self._palette)
+            self.cb_preview.set_palette(self._palette)
+            self._update_metadata()
+
+    def _remove_color(self):
+        self._remove_at_index(self._selected_idx)
+
+    def _remove_at_index(self, idx):
+        if len(self._palette) <= 1:
+            QMessageBox.information(self, "Info", "Palette must have at least one color.")
             return
-        n = len(self.palette)
-        w = r.width()
-        h = r.height()
-        x = 0
-        for i, col in enumerate(self.palette):
-            cr, cg, cb = col if isinstance(col, tuple) else (0, 0, 0)
-            qc = QColor(cr, cg, cb)
-            nx = ((i + 1) * w) // n
-            p.fillRect(x, 0, nx - x, h, qc)
-            if i == self.hover_idx:
-                p.fillRect(x, 0, nx - x, h, QColor(255, 255, 255, 35))
-            if i == self.selected_idx:
-                p.setPen(QPen(QColor("#89b4fa"), 2))
-                p.drawRect(x + 1, 1, nx - x - 2, h - 2)
-            if i < n - 1:
-                p.setPen(QPen(QColor(0, 0, 0, 50), 1))
-                p.drawLine(nx, 0, nx, h)
-            lum = 0.299 * cr + 0.587 * cg + 0.114 * cb
-            p.setPen(
-                QColor(0, 0, 0, 180) if lum > 128 else QColor(255, 255, 255, 200))
-            font = p.font()
-            font.setPixelSize(10)
-            p.setFont(font)
-            p.drawText(x, 0, nx - x, h, Qt.AlignmentFlag.AlignCenter,
-                       rgb_to_hex(cr, cg, cb))
-            x = nx
+        self._palette.pop(idx)
+        self._mark_modified()
+        self._rebuild_swatches()
+        self._select_index(min(idx, len(self._palette)-1))
+        self._update_metadata()
 
+    # ── Actions ───────────────────────────────────────────
 
-class WelcomeWidget(QWidget):
-    open_requested = Signal()
-    new_requested = Signal()
-    generate_requested = Signal()
+    def _sort_palette(self, mode):
+        self._palette = sort_palette(self._palette, mode)
+        self._mark_modified(); self._rebuild_swatches()
+        self._select_index(0); self._update_metadata()
 
-    def __init__(self):
-        super().__init__()
-        lay = QVBoxLayout(self)
-        lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        icon = QLabel("🦆 DuckPalette")
-        icon.setFont(QFont("Segoe UI", 28, QFont.Weight.Bold))
-        icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        icon.setStyleSheet("color:#89b4fa;")
-        lay.addWidget(icon)
-        sub = QLabel("Color palette management made easy")
-        sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        sub.setStyleSheet("color:#6c7086; font-size:14px; margin-bottom:20px;")
-        lay.addWidget(sub)
-        lay.addSpacing(20)
-        for text, sig in [
-            ("📂 Open File", self.open_requested),
-            ("✨ New Empty Palette", self.new_requested),
-            ("🎲 Generate Random Palettes", self.generate_requested),
-        ]:
-            btn = QPushButton(text)
-            btn.setFixedWidth(280)
-            btn.setMinimumHeight(38)
-            btn.clicked.connect(sig.emit)
-            lay.addWidget(btn, alignment=Qt.AlignmentFlag.AlignCenter)
-        lay.addStretch()
+    def _reverse_palette(self):
+        self._palette.reverse()
+        self._mark_modified(); self._rebuild_swatches()
+        self._select_index(0); self._update_metadata()
 
+    def _apply_variation(self, variation, strength):
+        self._palette = generate_variations(self._palette, variation, strength)
+        self._mark_modified(); self._rebuild_swatches()
+        self._select_index(0); self._update_metadata()
 
-class HarmonyDialog(QWidget):
-    palette_ready = Signal(list)
+    def _show_harmony_dialog(self):
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Generate Harmony Palette")
+        dlg.setMinimumWidth(360)
+        lay = QVBoxLayout(dlg)
 
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Color Harmony Generator")
-        self.setFixedSize(420, 400)
-        lay = QVBoxLayout(self)
         form = QFormLayout()
-        self.base_btn = QPushButton()
-        self.base_btn.setFixedSize(60, 28)
-        self.base_color = (200, 100, 50)
-        self._update_base_btn()
-        self.base_btn.clicked.connect(self._pick_base)
-        form.addRow("Base Color:", self.base_btn)
-        self.base_hex = QLineEdit(rgb_to_hex(*self.base_color))
-        self.base_hex.textChanged.connect(self._hex_changed)
-        form.addRow("Hex:", self.base_hex)
-        self.harmony_combo = QComboBox()
-        self.harmony_combo.addItems([
-            "complementary", "analogous", "triadic",
-            "split_complementary", "monochromatic", "tetradic",
-        ])
-        form.addRow("Harmony:", self.harmony_combo)
-        self.count_spin = QSpinBox()
-        self.count_spin.setRange(2, 10)
-        self.count_spin.setValue(5)
-        form.addRow("Colors:", self.count_spin)
-        self.sat_spin = QDoubleSpinBox()
-        self.sat_spin.setRange(0.1, 1.0)
-        self.sat_spin.setValue(0.75)
-        self.sat_spin.setSingleStep(0.05)
-        form.addRow("Saturation:", self.sat_spin)
-        self.val_spin = QDoubleSpinBox()
-        self.val_spin.setRange(0.1, 1.0)
-        self.val_spin.setValue(0.75)
-        self.val_spin.setSingleStep(0.05)
-        form.addRow("Value:", self.val_spin)
+        hue_spin = QDoubleSpinBox(); hue_spin.setRange(0,360); hue_spin.setValue(180)
+        harmony_combo = QComboBox()
+        harmony_combo.addItems(["complementary","analogous","triadic","split_complementary","monochromatic","tetradic"])
+        num_spin = QSpinBox(); num_spin.setRange(2,12); num_spin.setValue(5)
+        sat_spin = QDoubleSpinBox(); sat_spin.setRange(0,1); sat_spin.setSingleStep(0.05); sat_spin.setValue(0.75)
+        val_spin = QDoubleSpinBox(); val_spin.setRange(0,1); val_spin.setSingleStep(0.05); val_spin.setValue(0.75)
+        form.addRow("Base Hue:", hue_spin)
+        form.addRow("Harmony:", harmony_combo)
+        form.addRow("Colors:", num_spin)
+        form.addRow("Saturation:", sat_spin)
+        form.addRow("Value:", val_spin)
         lay.addLayout(form)
-        self.preview = PalettePreviewWidget()
-        lay.addWidget(self.preview)
+
+        # Preview
+        preview_strip = QLabel()
+        preview_strip.setFixedHeight(40)
+        preview_strip.setStyleSheet("border-radius:6px;")
+        lay.addWidget(preview_strip)
+
+        def _update_preview():
+            colors = generate_harmony_palette(
+                hue_spin.value(), harmony_combo.currentText(),
+                num_spin.value(), sat_spin.value(), val_spin.value())
+            px = create_palette_pixmap(colors, w=320, h=40)
+            preview_strip.setPixmap(px)
+
+        hue_spin.valueChanged.connect(_update_preview)
+        harmony_combo.currentTextChanged.connect(_update_preview)
+        num_spin.valueChanged.connect(_update_preview)
+        sat_spin.valueChanged.connect(_update_preview)
+        val_spin.valueChanged.connect(_update_preview)
+        _update_preview()
+
         btn_row = QHBoxLayout()
-        gen_btn = QPushButton("Generate Preview")
-        gen_btn.clicked.connect(self._generate)
-        use_btn = QPushButton("Use This Palette")
-        use_btn.clicked.connect(self._use)
-        btn_row.addWidget(gen_btn)
-        btn_row.addWidget(use_btn)
+        ok_btn = QPushButton("Apply"); ok_btn.setProperty("class","accent")
+        cancel_btn = QPushButton("Cancel")
+        ok_btn.clicked.connect(dlg.accept)
+        cancel_btn.clicked.connect(dlg.reject)
+        btn_row.addStretch(); btn_row.addWidget(ok_btn); btn_row.addWidget(cancel_btn)
         lay.addLayout(btn_row)
-        self._generated: List[Tuple[int, int, int]] = []
-        self._generate()
 
-    def _update_base_btn(self):
-        self.base_btn.setStyleSheet(
-            f"background-color:{rgb_to_hex(*self.base_color)}; "
-            "border:1px solid #585b70; border-radius:4px;")
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            self._palette = generate_harmony_palette(
+                hue_spin.value(), harmony_combo.currentText(),
+                num_spin.value(), sat_spin.value(), val_spin.value())
+            self._mark_modified(); self._rebuild_swatches()
+            self._select_index(0); self._update_metadata()
 
-    def _pick_base(self):
-        c = QColorDialog.getColor(QColor(*self.base_color), self)
-        if c.isValid():
-            self.base_color = (c.red(), c.green(), c.blue())
-            self.base_hex.blockSignals(True)
-            self.base_hex.setText(rgb_to_hex(*self.base_color))
-            self.base_hex.blockSignals(False)
-            self._update_base_btn()
-            self._generate()
+    def _import_from_image(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Import from Image", "",
+            "Images (*.png *.jpg *.jpeg *.bmp *.gif *.webp);;All Files (*)")
+        if path:
+            img = QImage(path)
+            if img.isNull():
+                QMessageBox.warning(self, "Error", "Cannot load image."); return
+            colors = extract_palette_kmeans(img, 5)
+            if not colors:
+                QMessageBox.warning(self, "Error", "No colors extracted."); return
+            self._palette = colors
+            self._mark_modified(); self._rebuild_swatches()
+            self._select_index(0); self._update_metadata()
+            AppSettings.add_recent_file(path)
 
-    def _hex_changed(self, txt: str):
-        try:
-            rgb = hex_to_rgb(txt)
-            self.base_color = rgb
-            self._update_base_btn()
-            self._generate()
-        except ValueError:
-            pass
+    # ── Save / Export ─────────────────────────────────────
 
-    def _generate(self):
-        h, s, v = rgb_to_hsv(*self.base_color)
-        self._generated = generate_harmony_palette(
-            h, self.harmony_combo.currentText(),
-            self.count_spin.value(), self.sat_spin.value(), self.val_spin.value())
-        self.preview.set_palette(self._generated)
+    def _save_palette(self):
+        name = self.name_edit.text().strip() or "Untitled"
+        if self._pid is not None:
+            controller.update_palette(self._pid, self._palette, name)
+        else:
+            self._pid = controller.create_palette(self._palette, name)
+        self._name = name; self._modified = False
+        self.palette_saved.emit()
+        ToastWidget(f"Saved: {name}", parent=self.window())
 
-    def _use(self):
-        if self._generated:
-            self.palette_ready.emit(list(self._generated))
+    def _export_palette(self):
+        name = self.name_edit.text().strip() or "palette"
+        formats = ";;".join([
+            "CSS (*.css)", "JSON (*.json)", "GIMP Palette (*.gpl)",
+            "SCSS (*.scss)", "Tailwind JS (*.js)", "SVG (*.svg)",
+            "Android XML (*.xml)", "Python (*.py)", "MAP (*.map)",
+        ])
+        path, _ = QFileDialog.getSaveFileName(self, "Export Palette", f"{name}", formats)
+        if path:
+            ext = path.rsplit(".", 1)[-1].lower() if "." in path else "map"
+            fmt_map = {"css":"css","json":"json","gpl":"gpl","scss":"scss","js":"tailwind",
+                       "svg":"svg","xml":"xml","py":"py","map":"map"}
+            fmt = fmt_map.get(ext, "map")
+            if controller.export_palette_data(self._palette, name, path, fmt):
+                ToastWidget(f"Exported to {os.path.basename(path)}", parent=self.window())
+            else:
+                QMessageBox.warning(self, "Error", "Export failed.")
 
+    # ── Metadata ──────────────────────────────────────────
 
-# ══════════════════════════════════════════════════════════════
-#  PALETTE EDITOR  (completed from truncated original)
-# ══════════════════════════════════════════════════════════════
-
-class PaletteEditor(QWidget):
-    changed = Signal()
-    closed = Signal()
-
-    def __init__(self, name: str = "Untitled", db_id: Optional[int] = None):
-        super().__init__()
-        self.name = name
-        self.db_id = db_id
-        self._tuples: List[Tuple[int, int, int]] = []
-        self._modified = False
-        self._undo_stack: List[List[Tuple[int, int, int]]] = []
-        self._redo_stack: List[List[Tuple[int, int, int]]] = []
-        self._adj_base: List[Tuple[int, int, int]] = []
-
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(8, 8, 8, 8)
-
-        # ── Header ──────────────────────────────────────────
-        hdr = QHBoxLayout()
-        self.name_edit = QLineEdit(name)
-        self.name_edit.setStyleSheet(
-            "font-weight:bold; font-size:15px; background:transparent; border:none;")
-        self.name_edit.textChanged.connect(self._name_edited)
-        hdr.addWidget(QLabel("Name:"))
-        hdr.addWidget(self.name_edit)
-        if db_id is not None:
-            hdr.addWidget(QLabel(f" [ID:{db_id}]"))
-        hdr.addStretch()
-        self.close_btn = QPushButton("Close")
-        self.close_btn.setFixedSize(60, 26)
-        self.close_btn.clicked.connect(self.closed.emit)
-        hdr.addWidget(self.close_btn)
-        lay.addLayout(hdr)
-
-        # ── Main splitter ──────────────────────────────────
-        h_split = QSplitter(Qt.Orientation.Horizontal)
-
-        # Left: color list
-        left_w = QWidget()
-        left_lay = QVBoxLayout(left_w)
-        left_lay.setContentsMargins(0, 0, 0, 0)
-
-        self.color_list = QListWidget()
-        self.color_list.setDragDropMode(QListWidget.DragDropMode.InternalMove)
-        self.color_list.setDefaultDropAction(Qt.DropAction.MoveAction)
-        self.color_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        self.color_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.color_list.customContextMenuRequested.connect(self._item_context_menu)
-        self.color_list.itemDoubleClicked.connect(self._edit_item_dialog)
-        self.color_list.currentRowChanged.connect(self._selection_changed)
-        self.color_list.model().rowsMoved.connect(lambda *_: self._sync_from_list())
-        left_lay.addWidget(self.color_list)
-
-        # BUG-FIX #6: complete the truncated button row
-        r1 = QHBoxLayout()
-        self.add_btn = QPushButton("+ Add")
-        self.add_btn.clicked.connect(self.add_color)
-        self.rm_btn = QPushButton("− Remove")
-        self.rm_btn.clicked.connect(self.remove_selected)
-        self.rm_btn.setEnabled(False)
-        r1.addWidget(self.add_btn)
-        r1.addWidget(self.rm_btn)
-        r1.addStretch()
-        self.undo_btn = QPushButton("↶")
-        self.undo_btn.setFixedSize(30, 26)
-        self.undo_btn.clicked.connect(self.undo)
-        self.undo_btn.setEnabled(False)
-        self.redo_btn = QPushButton("↷")
-        self.redo_btn.setFixedSize(30, 26)
-        self.redo_btn.clicked.connect(self.redo)
-        self.redo_btn.setEnabled(False)
-        r1.addWidget(self.undo_btn)
-        r1.addWidget(self.redo_btn)
-        left_lay.addLayout(r1)
-
-        h_split.addWidget(left_w)
-
-        # Right: preview + tools
-        right_w = QWidget()
-        right_lay = QVBoxLayout(right_w)
-        right_lay.setContentsMargins(0, 0, 0, 0)
-
-        self.preview = PalettePreviewWidget()
-        self.preview.color_clicked.connect(self._select_color_idx)
-        right_lay.addWidget(self.preview)
-
-        self.info_label = QLabel("Select a color")
-        self.info_label.setStyleSheet("color:#a6adc8; font-size:12px;")
-        self.info_label.setWordWrap(True)
-        right_lay.addWidget(self.info_label)
-
-        # Adjustments
-        adj_grp = QGroupBox("Adjustments")
-        adj_lay = QVBoxLayout(adj_grp)
-
-        adj_row1 = QHBoxLayout()
-        for text, var in [("Lighter", "lighter"), ("Darker", "darker"),
-                          ("Muted", "muted"), ("Vivid", "vivid")]:
-            btn = QPushButton(text)
-            btn.clicked.connect(lambda checked, v=var: self._apply_variation(v))
-            adj_row1.addWidget(btn)
-        adj_lay.addLayout(adj_row1)
-
-        adj_row2 = QHBoxLayout()
-        for text, var in [("Pastel", "pastel"), ("Warm", "warm"), ("Cool", "cool")]:
-            btn = QPushButton(text)
-            btn.clicked.connect(lambda checked, v=var: self._apply_variation(v))
-            adj_row2.addWidget(btn)
-        adj_lay.addLayout(adj_row2)
-
-        sort_row = QHBoxLayout()
-        sort_row.addWidget(QLabel("Sort:"))
-        for text, mode in [("Hue", "hue"), ("Bright", "brightness"), ("Sat", "saturation")]:
-            btn = QPushButton(text)
-            btn.clicked.connect(lambda checked, m=mode: self._sort_colors(m))
-            sort_row.addWidget(btn)
-        adj_lay.addLayout(sort_row)
-
-        dupe_btn = QPushButton("Find Duplicates")
-        dupe_btn.clicked.connect(self._find_duplicates)
-        adj_lay.addWidget(dupe_btn)
-
-        right_lay.addWidget(adj_grp)
-        right_lay.addStretch()
-
-        h_split.addWidget(right_w)
-        h_split.setSizes([220, 420])
-        lay.addWidget(h_split)
-
-        # Improvement #27: keyboard shortcuts
-        self.undo_shortcut = QKeySequence(QKeySequence.StandardKey.Undo)
-        self.redo_shortcut = QKeySequence(QKeySequence.StandardKey.Redo)
-
-    # ── Public API ─────────────────────────────────────────
-
-    def set_palette(self, pal: List[Tuple[int, int, int]]):
-        self._push_undo()
-        self._tuples = list(pal)
-        self._adj_base = list(pal)
-        self._sync_list_from_tuples()
-        self.preview.set_palette(self._tuples)
-        self._modified = False
-
-    def get_palette(self) -> List[Tuple[int, int, int]]:
-        return list(self._tuples)
-
-    def add_color(self, color: Optional[Tuple[int, int, int]] = None):
-        if color is None:
-            c = QColorDialog.getColor(QColor(128, 128, 128), self, "Pick Color")
-            if not c.isValid():
-                return
-            color = (c.red(), c.green(), c.blue())
-        self._push_undo()
-        self._tuples.append(color)
-        self._adj_base = list(self._tuples)
-        self._sync_list_from_tuples()
-        self._mark_modified()
-
-    def remove_selected(self):
-        idx = self.color_list.currentRow()
-        if idx < 0:
+    def _update_metadata(self):
+        if not self._palette:
+            self.meta_bright.setText("—")
+            self.meta_contrast.setText("—")
+            self.meta_dominant.setText("—")
+            self.meta_wcag.setText("—")
+            self.meta_dupes.setText("—")
             return
-        self._push_undo()
-        self._tuples.pop(idx)
-        self._adj_base = list(self._tuples)
-        self._sync_list_from_tuples()
-        self._mark_modified()
-
-    def undo(self):
-        if not self._undo_stack:
-            return
-        self._redo_stack.append(list(self._tuples))
-        self._tuples = self._undo_stack.pop()
-        self._adj_base = list(self._tuples)
-        self._sync_list_from_tuples()
-        self._update_undo_buttons()
-        self._mark_modified()
-
-    def redo(self):
-        if not self._redo_stack:
-            return
-        self._undo_stack.append(list(self._tuples))
-        self._tuples = self._redo_stack.pop()
-        self._adj_base = list(self._tuples)
-        self._sync_list_from_tuples()
-        self._update_undo_buttons()
-        self._mark_modified()
-
-    # ── Private helpers ────────────────────────────────────
-
-    def _push_undo(self):
-        self._undo_stack.append(list(self._tuples))
-        self._redo_stack.clear()
-        if len(self._undo_stack) > 50:
-            self._undo_stack.pop(0)
-        self._update_undo_buttons()
-
-    def _update_undo_buttons(self):
-        self.undo_btn.setEnabled(bool(self._undo_stack))
-        self.redo_btn.setEnabled(bool(self._redo_stack))
-
-    def _name_edited(self, text: str):
-        self.name = text
-        self._mark_modified()
+        b, c, d = calculate_metadata(self._palette)
+        wcag = palette_wcag_contrast(self._palette)
+        dupes = find_duplicate_colors(self._palette)
+        self.meta_bright.setText(f"{b:.1f}")
+        self.meta_contrast.setText(f"{c:.1f}")
+        self.meta_dominant.setText(d)
+        wcag_color = "#9ece6a" if wcag >= 7 else "#e0af68" if wcag >= 4.5 else "#f7768e"
+        self.meta_wcag.setText(f"{wcag:.2f}:1")
+        self.meta_wcag.setStyleSheet(f"color:{wcag_color}; font-weight:600;")
+        self.meta_dupes.setText(f"{len(dupes)} pairs" if dupes else "None")
+        if dupes:
+            self.meta_dupes.setStyleSheet("color:#f7768e;")
+        else:
+            self.meta_dupes.setStyleSheet("color:#9ece6a;")
 
     def _mark_modified(self):
         self._modified = True
-        self.changed.emit()
 
-    def _sync_list_from_tuples(self):
-        self.color_list.blockSignals(True)
-        self.color_list.clear()
-        for i, (r, g, b) in enumerate(self._tuples):
-            item = QListWidgetItem(f"  {rgb_to_hex(r, g, b)}   ({r}, {g}, {b})")
-            px = QPixmap(24, 24)
-            px.fill(QColor(r, g, b))
-            item.setIcon(px)
-            item.setForeground(QBrush(QColor("#cdd6f4")))
-            self.color_list.addItem(item)
-        self.color_list.blockSignals(False)
-        self.preview.set_palette(self._tuples)
-        self._update_undo_buttons()
+    # ── Public API ────────────────────────────────────────
 
-    def _sync_from_list(self):
-        """Rebuild _tuples after drag-drop reorder."""
-        new_tuples: List[Tuple[int, int, int]] = []
-        for i in range(self.color_list.count()):
-            item = self.color_list.item(i)
-            text = item.text().strip()
-            try:
-                hex_part = text.split()[0]
-                new_tuples.append(hex_to_rgb(hex_part))
-            except (ValueError, IndexError):
-                pass
-        if new_tuples:
-            self._tuples = new_tuples
-            self._adj_base = list(self._tuples)
-            self.preview.set_palette(self._tuples)
-            self._mark_modified()
+    def load_palette(self, pid):
+        palette = controller.get_palette(pid)
+        if palette:
+            self._pid = pid
+            self._palette = list(palette)
+            name = controller.db.get_name_by_id(pid) or "Untitled"
+            self._name = name
+            self.name_edit.setText(name)
+            self._rebuild_swatches()
+            self._select_index(0)
+            self._update_metadata()
+            self._modified = False
 
-    def _selection_changed(self, row: int):
-        self.rm_btn.setEnabled(row >= 0)
-        if 0 <= row < len(self._tuples):
-            r, g, b = self._tuples[row]
-            h, s, v = rgb_to_hsv(r, g, b)
-            hl, sl, ll = rgb_to_hsl(r, g, b)
-            self.info_label.setText(
-                f"Index {row}  •  {rgb_to_hex(r, g, b)}\n"
-                f"RGB({r}, {g}, {b})\n"
-                f"HSV({h:.1f}°, {s:.2f}, {v:.2f})\n"
-                f"HSL({hl:.1f}°, {sl:.1f}%, {ll:.1f}%)")
-            self.preview.set_selected(row)
-        else:
-            self.info_label.setText("Select a color")
-            self.preview.set_selected(-1)
+    def new_palette(self):
+        self._pid = None
+        self._palette = [(94,129,172),(166,227,161),(249,226,175),(247,118,142),(187,154,247)]
+        self.name_edit.setText("New Palette")
+        self._rebuild_swatches()
+        self._select_index(0)
+        self._update_metadata()
+        self._modified = False
 
-    def _select_color_idx(self, idx: int):
-        self.color_list.setCurrentRow(idx)
 
-    def _edit_item_dialog(self, item: QListWidgetItem):
-        row = self.color_list.row(item)
-        if row < 0 or row >= len(self._tuples):
-            return
-        old = self._tuples[row]
-        c = QColorDialog.getColor(QColor(*old), self, "Edit Color")
-        if c.isValid():
-            self._push_undo()
-            self._tuples[row] = (c.red(), c.green(), c.blue())
-            self._adj_base = list(self._tuples)
-            self._sync_list_from_tuples()
-            self.color_list.setCurrentRow(row)
-            self._mark_modified()
+# ═══════════════════════════════════════════════════════════
+#  BROWSE TAB
+# ═══════════════════════════════════════════════════════════
 
-    def _item_context_menu(self, pos: QPoint):
+class BrowseTab(QWidget):
+    palette_selected = Signal(int)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._init_ui()
+
+    def _init_ui(self):
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(12,12,12,12)
+        lay.setSpacing(8)
+
+        # Search / filter row
+        filter_row = QHBoxLayout()
+        self.search_edit = QLineEdit()
+        self.search_edit.setPlaceholderText("🔍 Search palettes...")
+        self.search_edit.textChanged.connect(self._refresh)
+
+        self.dominant_combo = QComboBox()
+        self.dominant_combo.addItem("All"); self.dominant_combo.addItems(["R","G","B"])
+        self.dominant_combo.currentTextChanged.connect(self._refresh)
+
+        self.fav_check = QCheckBox("★ Favorites")
+        self.fav_check.toggled.connect(self._refresh)
+
+        filter_row.addWidget(self.search_edit, 1)
+        filter_row.addWidget(QLabel("Dominant:"))
+        filter_row.addWidget(self.dominant_combo)
+        filter_row.addWidget(self.fav_check)
+        lay.addLayout(filter_row)
+
+        # Brightness range
+        bright_row = QHBoxLayout()
+        bright_row.addWidget(QLabel("Brightness:"))
+        self.bright_min = QSpinBox(); self.bright_min.setRange(0,255); self.bright_min.setSpecialValueText("Min")
+        self.bright_max = QSpinBox(); self.bright_max.setRange(0,255); self.bright_max.setValue(255); self.bright_max.setSpecialValueText("Max")
+        self.bright_min.valueChanged.connect(self._refresh)
+        self.bright_max.valueChanged.connect(self._refresh)
+        bright_row.addWidget(self.bright_min); bright_row.addWidget(QLabel("—")); bright_row.addWidget(self.bright_max)
+        bright_row.addStretch()
+        lay.addLayout(bright_row)
+
+        # Palette list
+        self.palette_list = QListWidget()
+        self.palette_list.setIconSize(QSize(120, 24))
+        self.palette_list.setAlternatingRowColors(True)
+        self.palette_list.itemDoubleClicked.connect(self._on_double_click)
+        self.palette_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.palette_list.customContextMenuRequested.connect(self._context_menu)
+        lay.addWidget(self.palette_list, 1)
+
+        # Actions
+        btn_row = QHBoxLayout()
+        gen_btn = QPushButton("🎲 Generate 10")
+        gen_btn.clicked.connect(self._generate)
+        import_btn = QPushButton("📂 Import File")
+        import_btn.clicked.connect(self._import_file)
+        btn_row.addWidget(gen_btn); btn_row.addWidget(import_btn); btn_row.addStretch()
+        lay.addLayout(btn_row)
+
+        self._refresh()
+
+    def _refresh(self):
+        self.palette_list.clear()
+        kwargs = {}
+        q = self.search_edit.text().strip()
+        if q: kwargs["name_query"] = q
+        dom = self.dominant_combo.currentText()
+        if dom != "All": kwargs["dominant"] = dom
+        if self.fav_check.isChecked(): kwargs["favorite_only"] = True
+        bmin = self.bright_min.value()
+        bmax = self.bright_max.value()
+        if bmin > 0: kwargs["min_bright"] = float(bmin)
+        if bmax < 255: kwargs["max_bright"] = float(bmax)
+
+        rows = controller.search_palettes(**kwargs)
+        for row in rows:
+            pid, name, bright, contrast, dominant, num_colors, packed, tags, favorite = row
+            palette = unpack_palette(packed, num_colors)
+            px = create_palette_pixmap(palette, 120, 24)
+            item = QListWidgetItem(QIcon(px), f"{'★ ' if favorite else ''}{name}  ({num_colors} colors)")
+            item.setData(Qt.ItemDataRole.UserRole, pid)
+            self.palette_list.addItem(item)
+
+    def _on_double_click(self, item):
+        pid = item.data(Qt.ItemDataRole.UserRole)
+        if pid: self.palette_selected.emit(pid)
+
+    def _context_menu(self, pos):
+        item = self.palette_list.itemAt(pos)
+        if not item: return
+        pid = item.data(Qt.ItemDataRole.UserRole)
         menu = QMenu(self)
-        row = self.color_list.currentRow()
+        open_act = menu.addAction("Edit")
+        fav_act = menu.addAction("★ Toggle Favorite")
+        rename_act = menu.addAction("Rename")
+        del_act = menu.addAction("Delete")
+        action = menu.exec(self.palette_list.mapToGlobal(pos))
+        if action == open_act: self.palette_selected.emit(pid)
+        elif action == fav_act: controller.db.toggle_favorite(pid); self._refresh()
+        elif action == rename_act:
+            new_name, ok = QInputDialog.getText(self, "Rename", "Name:", text=controller.db.get_name_by_id(pid))
+            if ok and new_name.strip(): controller.rename_palette(pid, new_name.strip()); self._refresh()
+        elif action == del_act:
+            if QMessageBox.question(self, "Delete", "Delete this palette?") == QMessageBox.StandardButton.Yes:
+                controller.delete_palette(pid); self._refresh()
 
-        copy_hex = menu.addAction("Copy Hex")
-        copy_rgb = menu.addAction("Copy RGB")
-        menu.addSeparator()
-        replace_action = menu.addAction("Replace Color…")
-        insert_before = menu.addAction("Insert Before…")
-        insert_after = menu.addAction("Insert After…")
-        menu.addSeparator()
-        remove_action = menu.addAction("Remove")
+    def _generate(self):
+        controller.generate_new_palettes(10); self._refresh()
 
-        action = menu.exec(self.color_list.mapToGlobal(pos))
-        if action is None:
-            return
-
-        clipboard = QApplication.clipboard()
-
-        if action == copy_hex and 0 <= row < len(self._tuples):
-            clipboard.setText(rgb_to_hex(*self._tuples[row]))
-        elif action == copy_rgb and 0 <= row < len(self._tuples):
-            r, g, b = self._tuples[row]
-            clipboard.setText(f"rgb({r}, {g}, {b})")
-        elif action == replace_action and 0 <= row < len(self._tuples):
-            c = QColorDialog.getColor(QColor(*self._tuples[row]), self, "Replace")
-            if c.isValid():
-                self._push_undo()
-                self._tuples[row] = (c.red(), c.green(), c.blue())
-                self._adj_base = list(self._tuples)
-                self._sync_list_from_tuples()
-                self._mark_modified()
-        elif action == insert_before:
-            c = QColorDialog.getColor(QColor(128, 128, 128), self, "Insert Color")
-            if c.isValid():
-                self._push_undo()
-                self._tuples.insert(max(0, row), (c.red(), c.green(), c.blue()))
-                self._adj_base = list(self._tuples)
-                self._sync_list_from_tuples()
-                self._mark_modified()
-        elif action == insert_after:
-            c = QColorDialog.getColor(QColor(128, 128, 128), self, "Insert Color")
-            if c.isValid():
-                self._push_undo()
-                idx = row + 1 if row >= 0 else len(self._tuples)
-                self._tuples.insert(idx, (c.red(), c.green(), c.blue()))
-                self._adj_base = list(self._tuples)
-                self._sync_list_from_tuples()
-                self._mark_modified()
-        elif action == remove_action:
-            self.remove_selected()
-
-    def _apply_variation(self, variation: str):
-        if not self._tuples:
-            return
-        self._push_undo()
-        self._tuples = generate_variations(self._adj_base, variation, 0.3)
-        self._sync_list_from_tuples()
-        self._mark_modified()
-
-    def _sort_colors(self, mode: str):
-        if not self._tuples:
-            return
-        self._push_undo()
-        self._tuples = sort_palette(self._tuples, mode)
-        self._adj_base = list(self._tuples)
-        self._sync_list_from_tuples()
-        self._mark_modified()
-
-    def _find_duplicates(self):
-        dupes = find_duplicate_colors(self._tuples)
-        if not dupes:
-            QMessageBox.information(self, "Duplicates", "No duplicate colors found.")
-            return
-        lines: List[str] = []
-        for i, j, dist in dupes:
-            lines.append(
-                f"  Colors {i} & {j}: {rgb_to_hex(*self._tuples[i])} ↔ "
-                f"{rgb_to_hex(*self._tuples[j])}  (dist={dist:.1f})")
-        QMessageBox.information(
-            self, "Duplicates", "Near-duplicate colors found:\n" + "\n".join(lines))
-
-    def keyPressEvent(self, e):
-        # Improvement #27: Ctrl+Z / Ctrl+Y
-        if e.matches(QKeySequence.StandardKey.Undo):
-            self.undo()
-        elif e.matches(QKeySequence.StandardKey.Redo):
-            self.redo()
-        elif e.key() == Qt.Key.Key_Delete:
-            self.remove_selected()
-        else:
-            super().keyPressEvent(e)
+    def _import_file(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Import Palette", "",
+            "Palette Files (*.map *.gpl *.ase *.csv *.hex *.txt);;All Files (*)")
+        if path:
+            pid, palette, name = controller.import_file_to_db(path)
+            if pid:
+                AppSettings.add_recent_file(path)
+                self._refresh()
+                ToastWidget(f"Imported: {name}", parent=self.window())
+            else:
+                QMessageBox.warning(self, "Error", "No colors found in file.")
 
 
-# ══════════════════════════════════════════════════════════════
-#  MAIN WINDOW  (completed from truncated original)
-# ══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════
+#  MAIN WINDOW
+# ═══════════════════════════════════════════════════════════
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("🦆 DuckPalette")
-        self.setMinimumSize(900, 600)
-        self.resize(1100, 700)
+        self.setWindowTitle("🦆 DuckPalette — Palette Manager")
+        self.setMinimumSize(1100, 750)
+        self.resize(1280, 800)
 
-        self._editors: Dict[int, PaletteEditor] = {}
-        self._screen_picker: Optional[ScreenColorPicker] = None
+        # Central tabs
+        self.tabs = QTabWidget()
+        self.tabs.setDocumentMode(True)
+        self.setCentralWidget(self.tabs)
 
-        self._build_ui()
-        self._build_menus()
+        # Editor tab
+        self.editor_tab = PaletteEditorTab()
+        self.editor_tab.palette_saved.connect(self._on_saved)
+
+        # Browse tab
+        self.browse_tab = BrowseTab()
+        self.browse_tab.palette_selected.connect(self._open_palette)
+
+        self.tabs.addTab(self.editor_tab, "🎨 Editor")
+        self.tabs.addTab(self.browse_tab, "📚 Browse")
+
+        # Toolbar
         self._build_toolbar()
-        self._refresh_palette_list()
 
+        # Status bar
         self.statusBar().showMessage("Ready")
 
-    # ── UI Construction ────────────────────────────────────
-
-    def _build_ui(self):
-        central = QWidget()
-        self.setCentralWidget(central)
-        main_lay = QVBoxLayout(central)
-        main_lay.setContentsMargins(0, 0, 0, 0)
-
-        self.splitter = QSplitter(Qt.Orientation.Horizontal)
-
-        # Left panel: palette browser
-        left_w = QWidget()
-        left_lay = QVBoxLayout(left_w)
-        left_lay.setContentsMargins(6, 6, 6, 6)
-
-        # Search row
-        search_row = QHBoxLayout()
-        self.search_edit = QLineEdit()
-        self.search_edit.setPlaceholderText("Search palettes…")
-        self.search_edit.textChanged.connect(self._refresh_palette_list)
-        search_row.addWidget(self.search_edit)
-        left_lay.addLayout(search_row)
-
-        # Filter row
-        filter_row = QHBoxLayout()
-        self.fav_check = QCheckBox("★ Favs")
-        self.fav_check.toggled.connect(self._refresh_palette_list)
-        filter_row.addWidget(self.fav_check)
-        self.dom_combo = QComboBox()
-        self.dom_combo.addItems(["Any", "R", "G", "B"])
-        self.dom_combo.currentIndexChanged.connect(self._refresh_palette_list)
-        filter_row.addWidget(QLabel("Dom:"))
-        filter_row.addWidget(self.dom_combo)
-        left_lay.addLayout(filter_row)
-
-        # Palette list
-        self.palette_list = QListWidget()
-        self.palette_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.palette_list.customContextMenuRequested.connect(self._list_context_menu)
-        self.palette_list.itemDoubleClicked.connect(self._open_palette_item)
-        left_lay.addWidget(self.palette_list)
-
-        # Palette list buttons
-        pl_btn_row = QHBoxLayout()
-        gen_btn = QPushButton("🎲 Generate")
-        gen_btn.clicked.connect(self._generate_palettes)
-        pl_btn_row.addWidget(gen_btn)
-        imp_btn = QPushButton("📂 Import")
-        imp_btn.clicked.connect(self._import_file)
-        pl_btn_row.addWidget(imp_btn)
-        left_lay.addLayout(pl_btn_row)
-
-        self.splitter.addWidget(left_w)
-
-        # Right panel: tab widget with editors + welcome
-        self.right_stack = QTabWidget()
-        self.right_stack.setTabsClosable(True)
-        self.right_stack.tabCloseRequested.connect(self._close_tab)
-
-        self.welcome = WelcomeWidget()
-        self.welcome.open_requested.connect(self._import_file)
-        self.welcome.new_requested.connect(self._new_palette)
-        self.welcome.generate_requested.connect(self._generate_palettes)
-
-        # Use a stacked approach: welcome when no tabs, tab widget otherwise
-        self.right_container = QWidget()
-        self.right_container_lay = QVBoxLayout(self.right_container)
-        self.right_container_lay.setContentsMargins(0, 0, 0, 0)
-        self.right_container_lay.addWidget(self.welcome)
-        self.right_container_lay.addWidget(self.right_stack)
-        self.right_stack.hide()
-
-        self.splitter.addWidget(self.right_container)
-        self.splitter.setSizes([300, 800])
-        main_lay.addWidget(self.splitter)
-
-    def _build_menus(self):
-        menubar = self.menuBar()
-
-        file_menu = menubar.addMenu("&File")
-        self._add_action(file_menu, "New Palette", self._new_palette, "Ctrl+N")
-        self._add_action(file_menu, "Open File…", self._import_file, "Ctrl+O")
-        self._add_action(file_menu, "Save", self._save_current, "Ctrl+S")
-        file_menu.addSeparator()
-        export_menu = file_menu.addMenu("Export As…")
-        for fmt, label in [
-            ("map", "PAL / MAP"), ("css", "CSS Variables"), ("json", "JSON"),
-            ("gpl", "GIMP Palette"), ("scss", "SCSS"), ("svg", "SVG"),
-            ("tailwind", "Tailwind Config"), ("xml", "Android XML"),
-            ("py", "Python"),
-        ]:
-            self._add_action(export_menu, label,
-                             lambda checked, f=fmt: self._export_current(f))
-        file_menu.addSeparator()
-        self._add_action(file_menu, "Exit", self.close, "Ctrl+Q")
-
-        edit_menu = menubar.addMenu("&Edit")
-        self._add_action(edit_menu, "Undo", self._undo_current, "Ctrl+Z")
-        self._add_action(edit_menu, "Redo", self._redo_current, "Ctrl+Y")
-        edit_menu.addSeparator()
-        self._add_action(edit_menu, "Add Color…", self._add_color_current, "Ctrl++")
-        self._add_action(edit_menu, "Remove Color", self._remove_color_current, "Ctrl+-")
-
-        tools_menu = menubar.addMenu("&Tools")
-        self._add_action(tools_menu, "Generate Palettes", self._generate_palettes)
-        self._add_action(tools_menu, "Harmony Generator…", self._show_harmony)
-        self._add_action(tools_menu, "Screen Color Picker", self._start_screen_picker)
-        tools_menu.addSeparator()
-        self._add_action(tools_menu, "Contrast Checker…", self._show_contrast_checker)
-        tools_menu.addSeparator()
-        cb_menu = tools_menu.addMenu("Color Blindness Sim…")
-        for cb_type, label in [("proto", "Protanopia"), ("deuto", "Deuteranopia"),
-                                ("trita", "Tritanopia")]:
-            self._add_action(cb_menu, label,
-                             lambda checked, t=cb_type: self._simulate_cb(t))
-
-        help_menu = menubar.addMenu("&Help")
-        self._add_action(help_menu, "About", self._show_about)
+        # Settings
+        settings = AppSettings.load()
+        if settings.get("window_geometry"):
+            self.restoreGeometry(bytes(settings["window_geometry"]))
 
     def _build_toolbar(self):
-        tb = self.addToolBar("Main")
-        tb.setMovable(False)
-        tb.addAction("📄 New", self._new_palette)
-        tb.addAction("📂 Open", self._import_file)
-        tb.addAction("💾 Save", self._save_current)
-        tb.addSeparator()
-        tb.addAction("🎲 Generate", self._generate_palettes)
-        tb.addAction("🎨 Pick Screen", self._start_screen_picker)
-        tb.addSeparator()
-        tb.addAction("📐 Contrast", self._show_contrast_checker)
-        tb.addAction("🌈 Harmony", self._show_harmony)
+        toolbar = QToolBar("Main")
+        toolbar.setMovable(False)
+        toolbar.setIconSize(QSize(20, 20))
+        self.addToolBar(toolbar)
 
-    @staticmethod
-    def _add_action(menu: QMenu, text: str, slot, shortcut: str = ""):
-        action = QAction(text, menu)
-        action.triggered.connect(slot)
-        if shortcut:
-            action.setShortcut(QKeySequence(shortcut))
-        menu.addAction(action)
-        return action
+        new_act = QAction("📄 New", self)
+        new_act.setShortcut(QKeySequence("Ctrl+N"))
+        new_act.triggered.connect(self._new_palette)
+        toolbar.addAction(new_act)
 
-    # ── Palette list ───────────────────────────────────────
+        save_act = QAction("💾 Save", self)
+        save_act.setShortcut(QKeySequence("Ctrl+S"))
+        save_act.triggered.connect(self.editor_tab._save_palette)
+        toolbar.addAction(save_act)
 
-    def _refresh_palette_list(self):
-        self.palette_list.clear()
-        name_q = self.search_edit.text().strip() or None
-        fav = self.fav_check.isChecked()
-        dom_idx = self.dom_combo.currentIndex()
-        dom = ["R", "G", "B"][dom_idx - 1] if dom_idx > 0 else None
-        rows = controller.search_palettes(
-            name_query=name_q, favorite_only=fav, dominant=dom, limit=200)
-        for row in rows:
-            pid, name, brightness, contrast, dominant, num_colors, packed, tags, favorite = row
-            pal = unpack_palette(packed, num_colors, 8)
-            item = QListWidgetItem()
-            label = f"{'★ ' if favorite else ''}{name}  [{num_colors}c]  B:{brightness:.0f} C:{contrast:.0f} {dominant}"
-            item.setText(label)
-            item.setData(Qt.ItemDataRole.UserRole, pid)
-            item.setIcon(create_palette_pixmap(pal, 60, 16))
-            self.palette_list.addItem(item)
-        self.statusBar().showMessage(f"{len(rows)} palettes loaded")
+        toolbar.addSeparator()
 
-    def _list_context_menu(self, pos: QPoint):
-        item = self.palette_list.currentItem()
-        if item is None:
-            return
-        pid = item.data(Qt.ItemDataRole.UserRole)
-        menu = QMenu(self)
-        open_action = menu.addAction("Open")
-        rename_action = menu.addAction("Rename…")
-        fav_action = menu.addAction("Toggle Favorite ★")
-        tags_action = menu.addAction("Edit Tags…")
-        menu.addSeparator()
-        dup_action = menu.addAction("Duplicate")
-        del_action = menu.addAction("Delete")
-        action = menu.exec(self.palette_list.mapToGlobal(pos))
-        if action is None:
-            return
-        if action == open_action:
-            self._open_palette(pid)
-        elif action == rename_action:
-            name, ok = QInputDialog.getText(self, "Rename", "New name:",
-                                            text=controller.db.get_name_by_id(pid) or "")
-            if ok and name.strip():
-                controller.rename_palette(pid, name.strip())
-                self._refresh_palette_list()
-        elif action == fav_action:
-            controller.db.toggle_favorite(pid)
-            self._refresh_palette_list()
-        elif action == tags_action:
-            row_data = controller.db.conn.execute(
-                "SELECT tags FROM palettes WHERE id=?", [pid]).fetchone()
-            current_tags = row_data[0] if row_data else ""
-            tags, ok = QInputDialog.getText(self, "Tags", "Tags (comma-separated):",
-                                            text=current_tags)
-            if ok:
-                controller.db.set_tags(pid, tags.strip())
-                self._refresh_palette_list()
-        elif action == dup_action:
-            pal = controller.get_palette(pid)
-            name = controller.db.get_name_by_id(pid) or "Palette"
-            if pal:
-                controller.create_palette(pal, name=f"{name} (copy)")
-                self._refresh_palette_list()
-        elif action == del_action:
-            r = QMessageBox.question(self, "Delete",
-                                     "Delete this palette?",
-                                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-            if r == QMessageBox.StandardButton.Yes:
-                controller.delete_palette(pid)
-                self._close_editor_tab(pid)
-                self._refresh_palette_list()
+        gen_act = QAction("🎲 Generate", self)
+        gen_act.triggered.connect(lambda: (controller.generate_new_palettes(5), self.browse_tab._refresh()))
+        toolbar.addAction(gen_act)
 
-    # ── Tab / Editor management ────────────────────────────
+        toolbar.addSeparator()
 
-    def _open_palette_item(self, item: QListWidgetItem):
-        pid = item.data(Qt.ItemDataRole.UserRole)
-        if pid is not None:
-            self._open_palette(pid)
+        import_act = QAction("📂 Import", self)
+        import_act.setShortcut(QKeySequence("Ctrl+O"))
+        import_act.triggered.connect(self._import_file)
+        toolbar.addAction(import_act)
 
-    def _open_palette(self, pid: int):
-        if pid in self._editors:
-            # Already open — activate tab
-            idx = self.right_stack.indexOf(self._editors[pid])
-            if idx >= 0:
-                self.right_stack.setCurrentIndex(idx)
-            return
-        pal = controller.get_palette(pid)
-        name = controller.db.get_name_by_id(pid) or "Untitled"
-        if pal is None:
-            self.statusBar().showMessage(f"Palette {pid} not found")
-            return
-        editor = PaletteEditor(name=name, db_id=pid)
-        editor.set_palette(pal)
-        editor.changed.connect(lambda p=pid: self._on_editor_changed(p))
-        editor.closed.connect(lambda p=pid: self._close_editor_tab(p))
-        self._editors[pid] = editor
-        idx = self.right_stack.addTab(editor, f" {name} ")
-        self._show_tabs()
-        self.right_stack.setCurrentIndex(idx)
+        export_act = QAction("📤 Export", self)
+        export_act.triggered.connect(self.editor_tab._export_palette)
+        toolbar.addAction(export_act)
 
-    def _close_tab(self, idx: int):
-        w = self.right_stack.widget(idx)
-        if w is None:
-            return
-        # Find pid for this widget
-        for pid, editor in list(self._editors.items()):
-            if editor is w:
-                self._close_editor_tab(pid)
-                return
-        # Could be a non-editor tab
-        self.right_stack.removeTab(idx)
-        w.deleteLater()
-        if self.right_stack.count() == 0:
-            self._hide_tabs()
+        toolbar.addSeparator()
 
-    def _close_editor_tab(self, pid: int):
-        if pid not in self._editors:
-            return
-        editor = self._editors.pop(pid)
-        idx = self.right_stack.indexOf(editor)
-        if idx >= 0:
-            self.right_stack.removeTab(idx)
-        editor.deleteLater()
-        if self.right_stack.count() == 0:
-            self._hide_tabs()
+        screen_pick_act = QAction("📺 Screen Pick", self)
+        screen_pick_act.triggered.connect(self.editor_tab._pick_screen_color)
+        toolbar.addAction(screen_pick_act)
 
-    def _show_tabs(self):
-        self.welcome.hide()
-        self.right_stack.show()
+        # Spacer
+        spacer = QWidget()
+        spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        toolbar.addWidget(spacer)
 
-    def _hide_tabs(self):
-        self.right_stack.hide()
-        self.welcome.show()
-
-    def _current_editor(self) -> Optional[PaletteEditor]:
-        w = self.right_stack.currentWidget()
-        if isinstance(w, PaletteEditor):
-            return w
-        return None
-
-    def _on_editor_changed(self, pid: int):
-        if pid not in self._editors:
-            return
-        editor = self._editors[pid]
-        # Update tab title with modification indicator
-        idx = self.right_stack.indexOf(editor)
-        if idx >= 0:
-            name = editor.name
-            self.right_stack.setTabText(idx, f" {name}●" if editor._modified else f" {name}")
-
-    # ── Actions ────────────────────────────────────────────
+        db_count_label = QLabel(f"DB: {controller.db.count()} palettes")
+        db_count_label.setStyleSheet("color:#565f89; font-size:11px; padding-right:8px;")
+        toolbar.addWidget(db_count_label)
 
     def _new_palette(self):
-        pal: List[Tuple[int, int, int]] = []
-        pid = controller.create_palette(pal, name="New Palette")
-        if pid is not None:
-            self._refresh_palette_list()
-            self._open_palette(pid)
+        self.editor_tab.new_palette()
+        self.tabs.setCurrentIndex(0)
 
-    def _generate_palettes(self):
-        count, ok = QInputDialog.getInt(self, "Generate", "Number of palettes:", 10, 1, 100)
-        if ok:
-            controller.generate_new_palettes(count)
-            self._refresh_palette_list()
-            self.statusBar().showMessage(f"Generated {count} palettes")
+    def _open_palette(self, pid):
+        self.editor_tab.load_palette(pid)
+        self.tabs.setCurrentIndex(0)
 
     def _import_file(self):
-        filepath, _ = QFileDialog.getOpenFileName(
-            self, "Import Palette", "",
-            "Palette Files (*.pal *.map *.gpl *.ase *.csv *.hex *.txt);;All Files (*)")
-        if not filepath:
-            return
-        pid, pal, name = controller.import_file_to_db(filepath)
-        if pid is not None:
-            AppSettings.add_recent_file(filepath)
-            self._refresh_palette_list()
-            self._open_palette(pid)
-            self.statusBar().showMessage(f"Imported {name} ({len(pal)} colors)")
-        else:
-            QMessageBox.warning(self, "Import", "No valid colors found in file.")
+        self.browse_tab._import_file()
 
-    def _save_current(self):
-        editor = self._current_editor()
-        if editor is None or editor.db_id is None:
-            self.statusBar().showMessage("No palette open to save")
-            return
-        palette = editor.get_palette()
-        name = editor.name
-        if len(palette) > MAX_PACK_COLORS:
-            QMessageBox.warning(
-                self, "Save Error",
-                f"Palettes with more than {MAX_PACK_COLORS} colors cannot be saved to the database.\n"
-                "Please reduce colors or export to a file instead.")
-            return
-        controller.update_palette(editor.db_id, palette, name)
-        editor._modified = False
-        self._on_editor_changed(editor.db_id)
-        self._refresh_palette_list()
-        self.statusBar().showMessage(f"Saved '{name}'")
-
-    def _export_current(self, fmt: str):
-        editor = self._current_editor()
-        if editor is None:
-            self.statusBar().showMessage("No palette open to export")
-            return
-        palette = editor.get_palette()
-        name = editor.name
-
-        filters = {
-            "map": "PAL Files (*.pal *.map)",
-            "css": "CSS Files (*.css)",
-            "json": "JSON Files (*.json)",
-            "gpl": "GIMP Palette (*.gpl)",
-            "scss": "SCSS Files (*.scss)",
-            "svg": "SVG Files (*.svg)",
-            "tailwind": "JS Files (*.js)",
-            "xml": "XML Files (*.xml)",
-            "py": "Python Files (*.py)",
-        }
-        filepath, _ = QFileDialog.getSaveFileName(
-            self, f"Export as {fmt.upper()}", f"{name}.{fmt}",
-            filters.get(fmt, "All Files (*)"))
-        if not filepath:
-            return
-        ok = controller.export_palette_data(palette, name, filepath, fmt)
-        if ok:
-            self.statusBar().showMessage(f"Exported to {filepath}")
-        else:
-            QMessageBox.warning(self, "Export", "Export failed.")
-
-    def _add_color_current(self):
-        editor = self._current_editor()
-        if editor:
-            editor.add_color()
-
-    def _remove_color_current(self):
-        editor = self._current_editor()
-        if editor:
-            editor.remove_selected()
-
-    def _undo_current(self):
-        editor = self._current_editor()
-        if editor:
-            editor.undo()
-
-    def _redo_current(self):
-        editor = self._current_editor()
-        if editor:
-            editor.redo()
-
-    def _show_harmony(self):
-        dlg = HarmonyDialog(self)
-        dlg.palette_ready.connect(self._use_harmony_palette)
-        dlg.show()
-
-    def _use_harmony_palette(self, pal: list):
-        pid = controller.create_palette(pal, name="Harmony")
-        if pid is not None:
-            self._refresh_palette_list()
-            self._open_palette(pid)
-
-    def _start_screen_picker(self):
-        self._screen_picker = ScreenColorPicker()
-        self._screen_picker.color_picked.connect(self._on_screen_color_picked)
-        self._screen_picker.cancelled.connect(self._on_screen_picker_cancelled)
-        self._screen_picker.start()
-
-    def _on_screen_color_picked(self, color: tuple):
-        r, g, b = color
-        QApplication.clipboard().setText(rgb_to_hex(r, g, b))
-        self.statusBar().showMessage(
-            f"Picked {rgb_to_hex(r, g, b)} — copied to clipboard")
-        editor = self._current_editor()
-        if editor:
-            editor.add_color(color)
-        self._screen_picker = None
-
-    def _on_screen_picker_cancelled(self):
-        self.statusBar().showMessage("Screen picker cancelled")
-        self._screen_picker = None
-
-    def _show_contrast_checker(self):
-        dlg = ContrastCheckerWidget()
-        dlg.setWindowTitle("Contrast Checker")
-        dlg.setWindowFlags(Qt.WindowType.Window)
-        dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
-        dlg.show()
-
-    def _simulate_cb(self, cb_type: str):
-        editor = self._current_editor()
-        if editor is None:
-            self.statusBar().showMessage("No palette open")
-            return
-        pal = editor.get_palette()
-        sim = simulate_colorblind(pal, cb_type)
-        pid = controller.create_palette(sim, name=f"CB_{cb_type}_{editor.name}")
-        if pid is not None:
-            self._refresh_palette_list()
-            self._open_palette(pid)
-
-    def _show_about(self):
-        QMessageBox.about(
-            self, "About DuckPalette",
-            "🦆 <b>DuckPalette</b> v1.0<br>"
-            "Color palette management with DuckDB + Numba + PySide6<br><br>"
-            "Features: generate, import, export, harmony, contrast checker, "
-            "color blindness simulation, screen picker, and more.")
-
-    # ── Window events ──────────────────────────────────────
+    def _on_saved(self):
+        self.browse_tab._refresh()
 
     def closeEvent(self, e):
-        # Check for unsaved changes
-        unsaved = [ed for ed in self._editors.values() if ed._modified]
-        if unsaved:
-            r = QMessageBox.question(
-                self, "Unsaved Changes",
-                f"{len(unsaved)} palette(s) have unsaved changes. Close anyway?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-            if r == QMessageBox.StandardButton.No:
-                e.ignore()
-                return
-        # Save settings
-        settings = AppSettings.load()
-        settings["window_geometry"] = self.saveGeometry().data().hex()
-        settings["splitter_sizes"] = self.splitter.sizes()
+        settings = {
+            "window_geometry": list(self.saveGeometry().data()),
+        }
         AppSettings.save(settings)
-        e.accept()
-
-    def showEvent(self, e):
-        super().showEvent(e)
-        settings = AppSettings.load()
-        geo = settings.get("window_geometry")
-        if geo:
-            try:
-                self.restoreGeometry(bytes.fromhex(geo))
-            except Exception:
-                pass
-        sizes = settings.get("splitter_sizes")
-        if sizes and len(sizes) == 2:
-            self.splitter.setSizes(sizes)
+        super().closeEvent(e)
 
 
-# ══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════
 #  CLI
-# ══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════
 
 def cli_main(args):
-    """Handle command-line interface commands."""
-    cmd = args.command
-    controller_cli = PaletteController()
-
-    if cmd == "list":
-        rows = controller_cli.search_palettes(limit=args.limit or 50)
-        if not rows:
-            print("No palettes found.")
-            return
-        print(f"{'ID':>6}  {'Name':<30}  {'#':>3}  {'Bright':>7}  {'Contr':>7}  {'Dom':>3}  {'Fav':>3}")
-        print("─" * 75)
-        for pid, name, brightness, contrast, dominant, num_colors, packed, tags, favorite in rows:
-            fav_mark = "★" if favorite else ""
-            print(f"{pid:>6}  {name:<30}  {num_colors:>3}  {brightness:>7.1f}  {contrast:>7.1f}  {dominant:>3}  {fav_mark:>3}")
-
-    elif cmd == "generate":
+    if args.cmd == "list":
+        rows = controller.search_palettes(limit=args.limit or 50)
+        for row in rows:
+            pid, name, bright, contrast, dominant, num_colors, *_ = row
+            print(f"  [{pid:>4}] {name:<30} colors={num_colors} bright={bright:.1f} contrast={contrast:.1f} dom={dominant}")
+    elif args.cmd == "generate":
         count = args.count or 10
-        controller_cli.generate_new_palettes(count)
+        controller.generate_new_palettes(count)
         print(f"Generated {count} palettes.")
-
-    elif cmd == "export":
+    elif args.cmd == "export":
         pid = args.id
         fmt = args.format or "map"
-        pal = controller_cli.get_palette(pid)
-        name = controller_cli.db.get_name_by_id(pid) or "Palette"
-        if pal is None:
-            print(f"Palette ID {pid} not found.")
-            return
-        out = args.output or f"{name}.{fmt}"
-        ok = controller_cli.export_palette_data(pal, name, out, fmt)
-        if ok:
-            print(f"Exported palette '{name}' to {out}")
+        palette = controller.get_palette(pid)
+        if not palette:
+            print(f"Palette {pid} not found."); return
+        name = controller.db.get_name_by_id(pid) or "palette"
+        out = args.output or f"palette_{pid}.{fmt}"
+        ok = controller.export_palette_data(palette, name, out, fmt)
+        print(f"Export {'OK' if ok else 'FAILED'}: {out}")
+    elif args.cmd == "import":
+        path = args.file
+        pid, palette, name = controller.import_file_to_db(path)
+        if pid:
+            print(f"Imported '{name}' as palette #{pid} ({len(palette)} colors)")
         else:
-            print("Export failed.")
-
-    elif cmd == "import":
-        filepath = args.filepath
-        pid, pal, name = controller_cli.import_file_to_db(filepath)
-        if pid is not None:
-            print(f"Imported '{name}' ({len(pal)} colors) as ID {pid}")
-        else:
-            print("No valid colors found in file.")
-
-    elif cmd == "info":
+            print("No colors found in file.")
+    elif args.cmd == "info":
         pid = args.id
-        pal = controller_cli.get_palette(pid)
-        name = controller_cli.db.get_name_by_id(pid) or "Unknown"
-        if pal is None:
-            print(f"Palette ID {pid} not found.")
-            return
-        brightness, contrast, dominant = calculate_metadata(pal)
-        wcag = palette_wcag_contrast(pal)
-        print(f"Palette: {name} (ID {pid})")
-        print(f"Colors:  {len(pal)}")
-        print(f"Brightness: {brightness:.1f}")
-        print(f"Contrast:   {contrast:.1f}")
-        print(f"Dominant:   {dominant}")
-        print(f"WCAG ratio: {wcag:.2f}:1")
-        print()
-        for i, (r, g, b) in enumerate(pal):
-            h, s, v = rgb_to_hsv(r, g, b)
-            print(f"  {i + 1:>3}. {rgb_to_hex(r, g, b)}  RGB({r:3d},{g:3d},{b:3d})  "
-                  f"HSV({h:5.1f}°,{s:.2f},{v:.2f})")
-
-    else:
-        print(f"Unknown command: {cmd}")
-        print("Use: list, generate, export, import, info")
+        palette = controller.get_palette(pid)
+        if not palette:
+            print(f"Palette {pid} not found."); return
+        b, c, d = calculate_metadata(palette)
+        wcag = palette_wcag_contrast(palette)
+        print(f"Palette #{pid}: {len(palette)} colors")
+        print(f"  Brightness: {b:.1f}  Contrast: {c:.1f}  Dominant: {d}  WCAG: {wcag:.2f}")
+        for i, col in enumerate(palette):
+            print(f"  [{i}] {rgb_to_hex(*col)}  rgb{col}")
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="DuckPalette — Color Palette Manager")
-    sub = parser.add_subparsers(dest="mode")
-
-    # GUI (default)
-    sub.add_parser("gui", help="Launch GUI (default)")
-
-    # CLI
-    cli = sub.add_parser("cli", help="CLI mode")
-    cli_sub = cli.add_subparsers(dest="command")
-
-    ls = cli_sub.add_parser("list", help="List palettes")
-    ls.add_argument("--limit", type=int, default=50)
-
-    gen = cli_sub.add_parser("generate", help="Generate random palettes")
-    gen.add_argument("--count", type=int, default=10)
-
-    exp = cli_sub.add_parser("export", help="Export a palette")
-    exp.add_argument("id", type=int, help="Palette ID")
-    exp.add_argument("--format", "-f", default="map",
-                     choices=["map", "css", "json", "gpl", "scss", "svg",
-                              "tailwind", "xml", "py"])
-    exp.add_argument("--output", "-o", help="Output filepath")
-
-    imp = cli_sub.add_parser("import", help="Import palette from file")
-    imp.add_argument("filepath", help="File to import")
-
-    info = cli_sub.add_parser("info", help="Show palette details")
-    info.add_argument("id", type=int, help="Palette ID")
-
-    return parser
-
-
-# ══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════
 #  ENTRY POINT
-# ══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════
 
 def main():
-    parser = build_parser()
+    parser = argparse.ArgumentParser(description="DuckPalette — Palette Manager")
+    sub = parser.add_subparsers(dest="mode")
+    sub.default = "gui"
+
+    cli_parser = sub.add_parser("cli", help="CLI mode")
+    cli_sub = cli_parser.add_subparsers(dest="cmd")
+    list_p = cli_sub.add_parser("list")
+    list_p.add_argument("--limit", type=int, default=50)
+    gen_p = cli_sub.add_parser("generate")
+    gen_p.add_argument("--count", type=int, default=10)
+    exp_p = cli_sub.add_parser("export")
+    exp_p.add_argument("id", type=int)
+    exp_p.add_argument("--format", default="map")
+    exp_p.add_argument("--output")
+    imp_p = cli_sub.add_parser("import")
+    imp_p.add_argument("file")
+    info_p = cli_sub.add_parser("info")
+    info_p.add_argument("id", type=int)
+
     args = parser.parse_args()
 
-    # Default to GUI if no subcommand given
-    if args.mode is None or args.mode == "gui":
+    if args.mode == "cli" and args.cmd:
+        cli_main(args)
+    else:
         app = QApplication(sys.argv)
-        app.setStyle("Fusion")
         app.setStyleSheet(DARK_STYLE)
-
-        # Set dark fusion palette for native dialogs
-        palette = QPalette()
-        palette.setColor(QPalette.ColorRole.Window, QColor("#1e1e2e"))
-        palette.setColor(QPalette.ColorRole.WindowText, QColor("#cdd6f4"))
-        palette.setColor(QPalette.ColorRole.Base, QColor("#181825"))
-        palette.setColor(QPalette.ColorRole.AlternateBase, QColor("#313244"))
-        palette.setColor(QPalette.ColorRole.ToolTipBase, QColor("#313244"))
-        palette.setColor(QPalette.ColorRole.ToolTipText, QColor("#cdd6f4"))
-        palette.setColor(QPalette.ColorRole.Text, QColor("#cdd6f4"))
-        palette.setColor(QPalette.ColorRole.Button, QColor("#313244"))
-        palette.setColor(QPalette.ColorRole.ButtonText, QColor("#cdd6f4"))
-        palette.setColor(QPalette.ColorRole.BrightText, QColor("#f38ba8"))
-        palette.setColor(QPalette.ColorRole.Link, QColor("#89b4fa"))
-        palette.setColor(QPalette.ColorRole.Highlight, QColor("#45475a"))
-        palette.setColor(QPalette.ColorRole.HighlightedText, QColor("#cdd6f4"))
-        app.setPalette(palette)
-
+        app.setStyle("Fusion")
         window = MainWindow()
         window.show()
         sys.exit(app.exec())
-
-    elif args.mode == "cli":
-        if not args.command:
-            parser.print_help()
-            return
-        cli_main(args)
-    else:
-        parser.print_help()
 
 
 if __name__ == "__main__":

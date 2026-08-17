@@ -37,9 +37,9 @@ from PySide6.QtWidgets import (
 from PySide6.QtGui import (
     QColor, QBrush, QPainter, QPen, QFont, QAction, QKeySequence,
     QPalette, QPixmap, QClipboard, QCursor, QImage, QLinearGradient,
-    QDrag, QPainterPath, QConicalGradient, QRadialGradient,
+    QDrag, QPainterPath, QConicalGradient, QRadialGradient, QIcon,
 )
-from PySide6.QtCore import Qt, QSize, Signal, QTimer, QPoint, QMimeData, QByteArray
+from PySide6.QtCore import Qt, QSize, Signal, QTimer, QPoint, QMimeData, QByteArray, QRect
 
 # ═══════════════════════════════════════════════════════════
 #  STYLESHEET (improved)
@@ -850,21 +850,23 @@ class GradientSlider(QWidget):
         return 8 + int(ratio * span)
 
     def paintEvent(self, e):
-        p = QPainter(self); p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        track_rect = self.rect().adjusted(8, 6, -8, -6)
-        # Draw gradient track
-        grad = QLinearGradient(track_rect.left(), 0, track_rect.right(), 0)
-        for pos, color in self._gradient_stops:
-            grad.setColorAt(pos, color)
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(grad)
-        p.drawRoundedRect(track_rect, 4, 4)
-        # Handle
-        hx = self._handle_x()
-        p.setBrush(QColor("#7aa2f7"))
-        p.setPen(QPen(QColor("#1a1b26"), 2))
-        p.drawEllipse(QPoint(hx, self.height()//2), 7, 7)
-        p.end()
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        try:
+            track_rect = self.rect().adjusted(8, 6, -8, -6)
+            grad = QLinearGradient(track_rect.left(), 0, track_rect.right(), 0)
+            for pos, color in self._gradient_stops:
+                grad.setColorAt(pos, color)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(grad)
+            p.drawRoundedRect(track_rect, 4, 4)
+
+            hx = self._handle_x()
+            p.setBrush(QColor("#7aa2f7"))
+            p.setPen(QPen(QColor("#1a1b26"), 2))
+            p.drawEllipse(QPoint(hx, self.height() // 2), 7, 7)
+        finally:
+            p.end()
 
     def mousePressEvent(self, e):
         if e.button()==Qt.MouseButton.LeftButton: self._dragging=True; self._set_from_x(e.position().x())
@@ -905,29 +907,36 @@ class ColorSwatchWidget(QFrame):
         self.selected = sel; self.update()
 
     def paintEvent(self, e):
-        p = QPainter(self); p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        r,g,b = self.color; hx = rgb_to_hex(r,g,b)
-        # Swatch rect
-        sw_rect = self.rect().adjusted(4, 4, -4, -24)
-        # Shadow
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QColor(0,0,0,60))
-        p.drawRoundedRect(sw_rect.adjusted(2,2,2,2), 8, 8)
-        # Swatch fill
-        p.setBrush(QColor(r,g,b))
-        if self.selected:
-            p.setPen(QPen(QColor("#7aa2f7"), 2))
-        elif self._hover:
-            p.setPen(QPen(QColor("#545c7e"), 1))
-        else:
-            p.setPen(QPen(QColor("#3b4261"), 1))
-        p.drawRoundedRect(sw_rect, 8, 8)
-        # Hex label
-        p.setPen(QColor("#565f89"))
-        p.setFont(QFont("Segoe UI", 8))
-        label_rect = QRect(0, self.height()-20, self.width(), 20)
-        p.drawText(label_rect, Qt.AlignmentFlag.AlignCenter, hx)
-        p.end()
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        try:
+            r, g, b = self.color
+            hx = rgb_to_hex(r, g, b)
+
+            sw_rect = self.rect().adjusted(4, 4, -4, -24)
+
+            # Shadow
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QColor(0, 0, 0, 60))
+            p.drawRoundedRect(sw_rect.adjusted(2, 2, 2, 2), 8, 8)
+
+            # Swatch fill
+            p.setBrush(QColor(r, g, b))
+            if self.selected:
+                p.setPen(QPen(QColor("#7aa2f7"), 2))
+            elif self._hover:
+                p.setPen(QPen(QColor("#545c7e"), 1))
+            else:
+                p.setPen(QPen(QColor("#3b4261"), 1))
+            p.drawRoundedRect(sw_rect, 8, 8)
+
+            # Hex label
+            p.setPen(QColor("#565f89"))
+            p.setFont(QFont("Segoe UI", 8))
+            label_rect = QRect(0, self.height() - 20, self.width(), 20)
+            p.drawText(label_rect, Qt.AlignmentFlag.AlignCenter, hx)
+        finally:
+            p.end()
 
     def enterEvent(self, e): self._hover=True; self.update()
     def leaveEvent(self, e): self._hover=False; self.update()
@@ -975,31 +984,39 @@ class PaletteStripWidget(QWidget):
         self.selected_index = idx; self.update()
 
     def paintEvent(self, e):
-        if not self.palette:
-            p = QPainter(self); p.fillRect(self.rect(), QColor("#16161e"))
-            p.setPen(QColor("#3b4261")); p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "No colors yet")
-            p.end(); return
-        p = QPainter(self); p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        n = len(self.palette); w = self.width(); h = self.height()
-        # Gradient background
-        grad = QLinearGradient(0,0,w,0)
-        for i, col in enumerate(self.palette):
-            grad.setColorAt(i/max(n-1,1), QColor(*col))
-        if n == 1: grad.setColorAt(1.0, QColor(*self.palette[0]))
-        p.fillRect(self.rect(), grad)
-        # Selection indicator
-        if 0 <= self.selected_index < n:
-            x_start = self.selected_index * w // n
-            x_end = (self.selected_index + 1) * w // n
-            p.setPen(QPen(QColor("#7aa2f7"), 3))
-            p.drawLine(x_start, 0, x_end, 0)
-            p.drawLine(x_start, h-1, x_end, h-1)
-        # Color dividers
-        p.setPen(QPen(QColor(0,0,0,40), 1))
-        for i in range(1, n):
-            x = i * w // n
-            p.drawLine(x, 0, x, h)
-        p.end()
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        try:
+            if not self.palette:
+                p.fillRect(self.rect(), QColor("#16161e"))
+                p.setPen(QColor("#3b4261"))
+                p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "No colors yet")
+                return
+
+            n = len(self.palette)
+            w = self.width()
+            h = self.height()
+
+            grad = QLinearGradient(0, 0, w, 0)
+            for i, col in enumerate(self.palette):
+                grad.setColorAt(i / max(n - 1, 1), QColor(*col))
+            if n == 1:
+                grad.setColorAt(1.0, QColor(*self.palette[0]))
+            p.fillRect(self.rect(), grad)
+
+            if 0 <= self.selected_index < n:
+                x_start = self.selected_index * w // n
+                x_end = (self.selected_index + 1) * w // n
+                p.setPen(QPen(QColor("#7aa2f7"), 3))
+                p.drawLine(x_start, 0, x_end, 0)
+                p.drawLine(x_start, h - 1, x_end, h - 1)
+
+            p.setPen(QPen(QColor(0, 0, 0, 40), 1))
+            for i in range(1, n):
+                x = i * w // n
+                p.drawLine(x, 0, x, h)
+        finally:
+            p.end()
 
     def mousePressEvent(self, e):
         if e.button()==Qt.MouseButton.LeftButton and self.palette:
@@ -2029,8 +2046,17 @@ class MainWindow(QMainWindow):
 
         # Settings
         settings = AppSettings.load()
-        if settings.get("window_geometry"):
-            self.restoreGeometry(bytes(settings["window_geometry"]))
+        geo = settings.get("window_geometry")
+        if geo is not None:
+            try:
+                if isinstance(geo, list):
+                    # Old format: list of byte integers [23, 0, 255, ...]
+                    self.restoreGeometry(QByteArray(bytes(geo)))
+                elif isinstance(geo, str):
+                    # New format: base64-encoded string
+                    self.restoreGeometry(QByteArray.fromBase64(geo.encode("utf-8")))
+            except Exception as e:
+                logger.warning("Failed to restore window geometry: %s", e)    
 
     def _build_toolbar(self):
         toolbar = QToolBar("Main")
@@ -2096,7 +2122,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, e):
         settings = {
-            "window_geometry": list(self.saveGeometry().data()),
+            "window_geometry": bytes(self.saveGeometry().toBase64()).decode("utf-8"),
         }
         AppSettings.save(settings)
         super().closeEvent(e)
